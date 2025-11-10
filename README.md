@@ -2,9 +2,9 @@
 
 ## Introduction
 
-BLESerial is a library that allows serial communication over BLE. 
+BLESerial is a library that allows serial communication over a BLE connection. It implements the Nordic UART Service (NUS).
 
-It implements the Nordic UART Service.
+You will need a program like SerialUI (https://github.com/uutzinger/SerialUI) to communicate with your micro controller as Arduino IDE Monitor does not yet have NUS support.
 
 Functions:
  - begin(mode, deviceName, secure); 
@@ -40,7 +40,9 @@ Status:
 
 ## Installation
 
-Installation occurs through the Arduino library manager
+Installation occurs through the Arduino library manager.
+
+Requires a terminal application on a client computer that supports NUS.
 
 ## Dependencies
 
