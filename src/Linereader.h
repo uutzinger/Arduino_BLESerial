@@ -1,12 +1,13 @@
-
-#pragma once
-#include <Arduino.h>
-
 // Simple, non-blocking line reader for any Stream.
 // Usage:
 //   LineReader<128> lr;
 //   char line[128];
 //   if (lr.poll(bleSerial, line, sizeof(line))) { /* got a full line */ }
+//
+
+#ifndef LINEREADER_H
+#define LINEREADER_H
+
 template <size_t N>
 class LineReader {
 public:
@@ -60,3 +61,5 @@ private:
     size_t idx_;
     bool   sawCR_;
 };
+
+#endif // LINEREADER_H

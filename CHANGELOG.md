@@ -1,2 +1,2 @@
 # Changelog
-- November 2025 First release
+- November 2025 first release
