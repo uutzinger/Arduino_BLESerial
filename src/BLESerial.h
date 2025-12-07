@@ -57,7 +57,7 @@ extern "C" {
 /* Constants   */
 /******************************************************************************************************/
 
-#define BLE_SERIAL_VERSION_STRING "BLE Serial Library v1.1.0"
+#define BLE_SERIAL_VERSION_STRING "BLE Serial Library v1.1.1"
 #define BLE_SERIAL_APPEARANCE 0x0540 // Generic Sensor
 
 // Log levels: ascending by verbosity for comparisons like (logLevel >= LEVEL)

@@ -21,7 +21,7 @@ The library provides a server implementation as it is designed to work with prog
 
 There are similar implementations from other authors ([senseshift](https://github.com/senseshift/arduino-ble-serial), [afpineda](https://github.com/afpineda/NuS-NimBLE-Serial)).
 
-A throughput of more than 100k bytes/s was measured.
+A throughput of more than **100k bytes/s** and a latency of **10..20 ms** was achieved.
 
 ## Installation
 
@@ -34,7 +34,7 @@ Installation occurs through the Arduino library manager.
 
 ## Quick Start
 
-Minimal example demonstrating setup, polling vs task mode (ESP32), command parsing, and periodic TX:
+Minimal example demonstrating setup, polling versus task (ESP32) mode, command parsing, and date transmission and receiving:
 
 ```cpp
 #include <Arduino.h>
@@ -64,7 +64,7 @@ void setup() {
 
 void loop() {
   #ifndef ARDUINO_ARCH_ESP32
-    ble.update(); // required in Polling mode
+  ble.update(); // required in Polling mode
   #endif
 
   // Parse incoming lines from BLE
