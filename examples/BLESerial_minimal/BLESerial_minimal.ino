@@ -1,3 +1,11 @@
+/*
+BLE Serial Minimal Program
+
+This program demonstrates the BLESerial library by echoing received data back to the sender.
+
+Urs Utzinger
+November/December 2025
+*/
 #include <Arduino.h>
 #include <BLESerial.h>
 
@@ -10,26 +18,28 @@ void setup() {
 
   Serial.println(F("BLE Serial Minimal Program"));
 
+  
   if (!ble.begin(
-        BLESerial::Mode::Fast, 
-        "BLESerialDevice", 
-        false
+        BLESerial::Mode::Fast,        /*Fast, LowPower, LongRange, Balanced*/
+        "BLESerialDevice",            /*Name*/
+        BLESerial::Security::None /*None, JustWorks, PasskeyDisplay*/
        )
      )  {
     Serial.println(F("BLESerial begin() failed"));
     while (true) delay(1000);
   }
-  // For polling mode demonstration explicitly set pump mode
-  // otherwise set PumpMode::Task on ESP32s
-  ble.setPumpMode(BLESerial::PumpMode::Polling);
+  // ESP32 can transmit data in a background task. 
+  // To force polling mode set Polling pump.
+  // Non ESP32 boards only support polling mode.
+  ble.setPumpMode(BLESerial::PumpMode::Polling); /*Polling or Task (Esp32)*/
   Serial.println(F("Ready. Connect with a BLE UART client."));
 }
 
 
 void loop() {
 
-  // BLE Serial Update if using BLESerial::PumpMode::Polling
-  // otherwise comment this out
+  // BLE Serial Update required in main loop if using PumpMode::Polling
+  //   otherwise comment this out
   ble.update(); // polling pump
 
   // Echo any received bytes back out
@@ -39,7 +49,7 @@ void loop() {
       ble.write((uint8_t)c); // echo
     }
   }
-  // Optional: small delay to reduce busy loop CPU usage
+  // Small delay to reduce busy loop CPU usage
   delay(1);
 }
 

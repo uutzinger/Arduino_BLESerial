@@ -1,10 +1,22 @@
+/*
+BLE Serial Test Program
+
+This program demonstrates the BLESerial library with a comprehensive example.
+It sets up a BLE UART service, processes commands from a connected client,
+and generates data lines at a controlled rate. It also includes LED status
+indication. 
+
+Urs Utzinger
+November/December 2025
+*/
 #include <Arduino.h>
 #include <BLESerial.h>
 #include <Linereader.h>
+#include <StreamString.h>
 
-constexpr unsigned long BAUDRATE     = 2'000'000UL;
-constexpr uint8_t       LED_PIN      = LED_BUILTIN;
-constexpr bool          useTaskPump  = true;       // set to 'false' to use polling mode
+constexpr unsigned long BAUDRATE        = 2'000'000UL;
+constexpr uint8_t       LED_PIN         = LED_BUILTIN;
+constexpr bool          useTaskPump     = true;       // set to 'false' to use polling mode
 
 BLESerial               ble;
 LineReader<128>         lr;
@@ -45,9 +57,9 @@ void setup() {
   ble.setPumpMode(useTaskPump ? BLESerial::PumpMode::Task : BLESerial::PumpMode::Polling);
 
   if (!ble.begin(
-        BLESerial::Mode::Fast, 
-        "BLESerialDevice", 
-        false
+        BLESerial::Mode::Fast,        /*Fast, LowPower, LongRange, Balanced*/
+        "BLESerialDevice",            /*Name*/
+        BLESerial::Security::None     /*None, JustWorks, PasskeyDisplay*/
        )
      )  {
     Serial.println(F("BLESerial begin() failed"));
@@ -77,75 +89,68 @@ void loop() {
     ble.update(); // polling pump
   }
 
-  // Command Receiver
+  // Command Receiver (String)
   // =======================================================
   if (lr.poll(ble, line, sizeof(line))) { 
-    auto reply = [&](const char* msg){
+
+    auto reply = [&](const String& msg){
       Serial.println(msg);
-      ble.write(reinterpret_cast<const uint8_t*>(msg), strlen(msg));
-      ble.write(reinterpret_cast<const uint8_t*>("\r\n"), 2);
+      ble.println(msg);
     };
 
+    // Pause
     if (strcasecmp(line, "pause") == 0) {
       paused = true;
       reply("TX paused");
+
+    // Resume
     } else if (strcasecmp(line, "resume") == 0) {
       paused = false;
       reply("TX resumed");
+
+    // Status Report
     } else if (strcasecmp(line, ".") == 0) {
-      const char* modeStr = "Balanced";
-      switch (ble.getMode()) {
-        case BLESerial::Mode::Fast:      modeStr = "Fast";      break;
-        case BLESerial::Mode::LowPower:  modeStr = "LowPower";  break;
-        case BLESerial::Mode::LongRange: modeStr = "LongRange"; break;
-        default: break;
-      }
-      snprintf(data, sizeof(data),
-            "Status: connected=%d mode=%s rssi=%ddB",
-            ble.connected(), modeStr, ble.getRssi());
-      reply(data);
-      snprintf(data, sizeof(data),
-            "TX: buffered=%u free=%u bytesTx=%lu txDrops=%lu interval=%luµs chunk=%lu",
-            (unsigned)ble.getTxBuffered(), (unsigned)ble.getTxFree(),
-            ble.getBytesTx(), ble.getTxDrops(), ble.getInterval(), ble.getChunkSize());
-      reply(data);
-      snprintf(data, sizeof(data),
-            "RX: buffered=%u free=%u bytesRx=%lu rxDrops=%lu",
-            (unsigned)ble.getRxBuffered(), (unsigned)ble.getRxFree(),
-            ble.getBytesRx(), ble.getRxDrops());
-      reply(data);
-      snprintf(data, sizeof(data),
-            "Link: llOctets=%lu llTime=%luµs mtu=%u phy=%s",
-            ble.getLlOctets(), ble.getLlTimeUs(), ble.getMtu(), ble.getPhy());
-      reply(data);
+      StreamString sink;
+      ble.printStats(sink);
+      reply(sink.c_str());
+
+    // Help
     } else if (strcasecmp(line, "?") == 0) {
       reply("help:\r\n"
             "  pause  - pause data transmission\r\n"
             "  resume - resume data transmission\r\n"
             "  .      - BLESerial status report\r\n"
             "  ?      - this help message");
+
+    // Unknown command
     } else {
-      snprintf(data, sizeof(data),
-            "Unknown command: %s", line);
-      reply(data);
+      String err = String("Unknown command: ") + line;
+      reply(err);
     }
   } // end command receiver
 
-  // Data Generator
+  // Data Generator (char buffer)
   // =======================================================
-  if (!paused && ble.connected() && ble.writeReady()) {
+  if (!paused && ble.writeReady()) {
+
+    // Emit a fixed-length line of exactly 36 bytes (on 32-bit unsigned long):
+    //   "count="(6) + %10lu (10) + " rate="(6) + %10lu (10) + "/s\r\n"(4) = 36
+    // %10lu right-aligns with leading spaces
+    uint16_t dataWritten = ble.printf("count=%10lu rate=%10lu/s\r\n", dataCount, rate);
+    if (dataWritten != 36) {
+      Serial.printf("WARNING partial write %u/36 bytes\r\n",dataWritten);
+      ble.printStats(Serial);
+    } else {
+      dataCount++;
+    }
+
+    // Calculate data rate once per second
     if (currentTime - lastDataUs >= 1'000'000UL) {
       rate          = dataCount - dataCountPrev;
       lastDataUs    = currentTime;
       dataCountPrev = dataCount;
     }
 
-    // Emit a fixed-length line of exactly 36 bytes (on 32-bit unsigned long):
-    //   "count="(6) + %10lu (10) + " rate="(6) + %10lu (10) + "/s\r\n"(4) = 36
-    // %10lu right-aligns with leading spaces (no zeros)
-    int dataLen = snprintf(data, sizeof(data),
-            "count=%10lu rate=%10lu/s\r\n", dataCount++, rate);
-    ble.write(reinterpret_cast<const uint8_t*>(data), (size_t)dataLen);
   } // end data generator
 
   // Blink LED

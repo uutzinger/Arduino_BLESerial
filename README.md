@@ -2,62 +2,26 @@
 
 ## Introduction
 
-BLESerial is a library that allows serial communication over a BLE connection. It works in a similar fashion as a Serial USB connection. For example, we use `ble.write()` instead of `Serial.print()`. It implements the Nordic UART Service (NUS).
+BLESerial allows serial communication over a BLE connection <img src="./assets/Bluetooth_Logo.svg" height="20"/>.
 
-Implemented functions (Stream-compatible unless noted):
+It implements the [**Nordic UART Service (NUS)**](https://docs.nordicsemi.com/bundle/ncs-latest/page/nrf/libraries/bluetooth/services/nus.html) as a server on a micro controller, providing commands like:
 
-* begin(mode, deviceName, secure) – Initialize the driver
-* end() – Remove the driver
-* readAvailable() – amount of bytes in the receiver buffer
-* read() / read(*dst, n) – read from receiver buffer
-* peek() / peek(*dst, n) – peak from receiver buffer
-* write(b) / write(*b, n) – write to transmission buffer
-* writeTimeout(*p, n, timeoutMs)
-* writeReady() – returns whether transmitter will accept writes
-* writeAvailable() – returns number of bytes left in the tramission buffer
-* flush() – clears transmission buffer
-* update() – call this in loop when using Polling pump mode
+```
+BLESerial ble;
+ble.println("Hello");
+n=ble.available();
+ble.read(buffer,n);
+```
 
-Implemented setters:
+It attempts to adapt for maximum throughput, low power usage or long distance communication.
 
-* setLogLevel(level) – Verbosity level of logging on serial port
-* requestMTU(mtu) – Modify  MTU
-* getPumpMode() – current pump mode
-* setPumpMode(Polling|Task) – Polling, or ESP32 task mode which runs a background FreeRTOS TX pump
-* setPower() – sets power level for Advertising, Scanning or Connection
+The library provides a server implementation as it is designed to work with programs such as:
+- [SerialUI](https://github.com/uutzinger/SerialUI) 
+- [nRF connect for mobile](https://www.nordicsemi.com/Products/Development-tools/nRF-Connect-for-mobile)
 
-Implemented status queries:
+There are similar implementations from other authors ([senseshift](https://github.com/senseshift/arduino-ble-serial), [afpineda](https://github.com/afpineda/NuS-NimBLE-Serial)).
 
-* connected() –  true if client is connected
-* getMtu() – current MTU in use
-* getMode() – Fast, Longrange, Lowpower or Balanced
-* getBytesRx() / getBytesTx() – total bytes sent or received
-* getRxDrops() / getTxDrops() –  bytes dropped
-* getInterval() – current send interval in µs
-* getRssi() – current signal strength
-* getMac() – current MAC address
-* getTxBuffered() / getRxBuffered() – bytes in the transmission or receiver buffer
-* getTxCapacity() / getRxCapacity() – size of transmission or receiver buffer
-* getTxFree() / getRxFree() - remaining space in transmission or receiver buffer
-* isEncrypted() – connection encryption status
-* getLlOctets() / getLlTimeUs() – link-layer negotiated data length/time
-* getChunkSize() – current notify payload chunk size
-* getPhy() – "1M", "2M", or "Coded"
-
-Event hooks (additive):
-
-* setOnClientConnect(cb(addr)) – your custom hook
-* setOnClientDisconnect(cb(addr, reason)) –  your custom hook
-* setOnMtuChanged(cb(mtu)) –  your custom hook
-* setOnSubscribeChanged(cb(subscribed)) –  your custom hook
-* setOnDataReceived(cb(data, len)) –  your custom hook
-* setOnRxOverflow(cb(lost)) – called when RX ring overwrites oldest data
-
-Notes:
-
-* Hooks are additive: your callbacks do not replace internal logic; they run after built-in handling. Keep them fast or defer heavy work to your loop/task.
-* Pump mode: On ESP32, Task mode uses a FreeRTOS background TX pump; in Polling mode, call update() regularly from loop().
-
+A throughput of more than 100k bytes/s was measured.
 
 ## Installation
 
@@ -65,51 +29,70 @@ Installation occurs through the Arduino library manager.
 
 ## Dependencies
 
-* [NimBLE-Arduino](https://github.com/h2zero/NimBLE-Arduino)
-* RingBuffer (provided)
-
-You will need a client program like [SerialUI](https://github.com/uutzinger/SerialUI) to communicate with your micro controller as Arduino IDE Serial Monitor does not yet have NUS/BLESerial support.
+- [NimBLE-Arduino](https://github.com/h2zero/NimBLE-Arduino)
+- RingBuffer (provided)
 
 ## Quick Start
 
-```cpp
-#include <BLESerial.h>
-#include <Linereader.h>
+Minimal example demonstrating setup, polling vs task mode (ESP32), command parsing, and periodic TX:
 
-BLESerial               ble;
-LineReader<128>         lr;
+```cpp
+#include <Arduino.h>
+#include "BLESerial.h"
+#include "Linereader.h"
+
+BLESerial        ble;
+LineReader<128>  lr;
+
+char line[128];
+const char helpmsg[] = "Commands: ?=help, stats, echo <text>";
 
 void setup() {
-  ble.begin(BLESerial::Mode::Fast, "BLESerialDevice", false);
+  Serial.begin(115200);
+  while (!Serial) { /* wait for USB serial */ }
+
+  // Security::None | JustWorks | PasskeyDisplay
+  // Mode::Fast | LowPower | LongRange | Balanced
+  ble.begin(BLESerial::Mode::Fast, "BLESerialDevice", BLESerial::Security::None);
+
   #ifdef ARDUINO_ARCH_ESP32
-    ble.setPumpMode(BLESerial::PumpMode::Polling);
+  ble.setPumpMode(BLESerial::PumpMode::Task); // background TX pump
   #endif
+
+  Serial.println("BLESerial demo started.");
 }
 
-void loop(){
+void loop() {
+  #ifndef ARDUINO_ARCH_ESP32
+    ble.update(); // required in Polling mode
+  #endif
 
-  ble.update();
-
-  // read commands
-  if (lr.poll(ble, line, sizeof(line))) { 
-      auto reply = [&](const char* msg){
-        Serial.println(msg);
-        ble.write(reinterpret_cast<const uint8_t*>(msg), strlen(msg));
-        ble.write(reinterpret_cast<const uint8_t*>("\r\n"), 2);
-      };
-
+  // Parse incoming lines from BLE
+  if (lr.poll(ble, line, sizeof(line))) {
     if (strcasecmp(line, "?") == 0) {
-      reply(helpmsg);
-    } else if (...) {
-        ...
+      ble.println(helpmsg);
+      Serial.println(helpmsg);
+    } else if (strcasecmp(line, "stats") == 0) {
+      ble.printStats(); // shows on Serial port
+    } else if (strncasecmp(line, "echo ", 5) == 0) {
+      ble.println(line + 5);
+    } else {
+      ble.println("Unknown command. Type ? for help.");
     }
   }
-  
-  ... generate data
-  ble.write(reinterpret_cast<const uint8_t*>(data), (size_t)dataLen);
 }
-
 ```
+
+## Documentation
+- [API Documentation](./API.md)
+- [Operation Modes](./Operation_Modes.md)
+- [To Do](./TODO.md)
+- [Change Log](./CHANGELOG.md)
+
+## Example Programs
+- BLESerial_minimal (simple echo program)
+- BLESerial_demo (simple program listed above)
+- BLESerial_comprehensive (generates data for performance measurements)
 
 ## Contributing
 
