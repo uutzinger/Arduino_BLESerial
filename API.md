@@ -13,11 +13,11 @@ Supported security is None, JustWorks and PasskeyDisplay.
 * available() / readAvailable() – Bytes currently buffered in RX ring.
 * read() / read(dst, n) – Pop one / up to n bytes from RX ring.
 * peek() / peek(dst, n) – Inspect one / up to n bytes without consuming.
-* write(b) / write(buf, n) – Non-blocking enqueue to TX ring (may be partial if flow control blocks).
+* write(b) / write(buf, n) – Non-blocking enqueue to TX ring (may be partial if flow control blocks). Returns actual number of bytes written.
 * write(const char*) / print(str) / println(str) – Convenience text output (println adds CRLF).
 * printf(fmt, ...) – Formatted print into TX ring (truncates at local buffer size).
 * writeTimeout(buf, n, timeoutMs) – Attempt to enqueue up to n bytes within timeout; cooperatively waits for buffer space/unlock; decoupled from in-flight notifies (pop-based staging).
-* writeReady() – True if a client is subscribed and producer lock is not asserted; intentionally ignores in-flight notifies under pop-based staging.
+* writeReady() – True if a client is subscribed and producer lock is not asserted.
 * writeAvailable() – Remaining free space in TX ring (capacity - used).
 
 ### Pumping / Scheduling
@@ -58,15 +58,13 @@ Supported security is None, JustWorks and PasskeyDisplay.
 * getTxCapacity() / getRxCapacity() – Total ring capacities.
 * getTxFree() / getRxFree() – Remaining free space in TX / RX rings.
 * getTxDrops() / getRxDrops() – Dropped bytes due to buffer saturation.
-* getLkgEscalateCount() – Number of pacing escalations.
-* getEappCount() – Application error occurrences.
 * getLowWaterMark() / getHighWaterMark() – Current low/high water marks used for TX flow control.
 
 ### Flow Control Concepts
 
 * Tx state machine – Internal: transmission advances through Waiting → Staging → Pending → Recovering/Discarding based on notify outcomes
 * txLocked – Internal: producer lock engaged (high-water limit reached; unlocks at low-water).
-  Use writeReady() or check return value of write()/writeTimeout() instead of inspecting internals.
+  Use writeReady() before writing and check if all data was successfully written.
 
 ### Implemented Setters
 
@@ -75,6 +73,8 @@ Supported security is None, JustWorks and PasskeyDisplay.
 * getPumpMode() – Current pump mode
 * setPumpMode(Polling|Task) – Polling, or ESP32 task mode which runs a background FreeRTOS TX pump
 * setPower() – sets power level for Advertising, Scanning or Connection
+* setInterval(interval) – sets transmission interval in microseconds, auto adjusted during runtime
+* getInterval() – current pacing interval (µs)
 
 ### Implemented Status Queries
 
@@ -84,7 +84,6 @@ Supported security is None, JustWorks and PasskeyDisplay.
 * getMode() – Fast, LongRange, LowPower, or Balanced
 * getBytesRx() / getBytesTx() – total bytes received/sent
 * getRxDrops() / getTxDrops() – dropped bytes
-* getInterval() – current pacing interval (µs)
 * getLkgInterval() / getMinInterval() – current LKG and minimum intervals (µs)
 * getRSSI() – smoothed RSSI
 * getMac() – device MAC address

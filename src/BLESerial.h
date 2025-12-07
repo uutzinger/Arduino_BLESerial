@@ -57,7 +57,7 @@ extern "C" {
 /* Constants   */
 /******************************************************************************************************/
 
-#define BLE_SERIAL_VERSION_STRING "BLE Serial Library v1.1.1"
+#define BLE_SERIAL_VERSION_STRING "BLE Serial Library v1.1.2"
 #define BLE_SERIAL_APPEARANCE 0x0540 // Generic Sensor
 
 // Log levels: ascending by verbosity for comparisons like (logLevel >= LEVEL)
@@ -336,6 +336,8 @@ public:
   #else
     void   setPumpMode(PumpMode m) { pumpMode = PumpMode::Polling; } // no Task on non-ESP32
   #endif
+  void     setInterval(uint32_t us) {sendIntervalUs = us; }
+           // set desired send interval in microseconds, auto adjusted through probing during runtime
 
   // ----------------------------------------------------------------------------------------------
   // Logging / diagnostics
