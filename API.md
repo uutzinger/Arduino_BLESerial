@@ -3,10 +3,12 @@
 ### Lifecycle
 
 * begin(mode, deviceName, securityMode) – Initialize BLE stack, create service & characteristics, start advertising.
+* begin(mode, deviceName, securityMode, pairingPolicy) – Same as above, with explicit onboarding policy for new peers.
 * end() – Stop advertising, disconnect client (if any), free resources, reset internal state.
 
 Supported mode is Fast, Long Range, Low Power and Balanced.
 Supported security is None, JustWorks and PasskeyDisplay.
+Supported pairing policies are AlwaysOpen, Windowed and BondedOnly.
 
 ### Stream / I/O (Arduino Stream-compatible where applicable)
 
@@ -31,6 +33,25 @@ Supported security is None, JustWorks and PasskeyDisplay.
 
 * requestMTU(newMtu) – Request peer to negotiate a higher MTU (subject to controller/peer limits).
 * setPower(dBm, scope) – Adjust transmit power for Advertising, Scanning, Connection, or All.
+
+### Security
+
+* `Security::None` – No BLE pairing or link encryption required.
+* `Security::JustWorks` – Encrypted bonded LE Secure Connections link without passkey entry.
+* `Security::PasskeyDisplay` – Encrypted bonded connection with displayed 6-digit passkey and MITM protection.
+* `PairingPolicy::AlwaysOpen` – Current/default behavior. New peers may pair whenever they connect.
+* `PairingPolicy::Windowed` – New peers may pair only while a temporary pairing window is open. Bonded peers may always reconnect.
+* `PairingPolicy::BondedOnly` – New peers are rejected by default. Bonded peers may reconnect. A temporary pairing window can still be opened manually.
+* `setPairingPolicy(policy)` – Change onboarding policy at runtime.
+* `getPairingPolicy()` – Return current onboarding policy.
+* `openPairingWindow(durationMs)` – Temporarily allow new peers to pair, typically after a physical button press.
+* `closePairingWindow()` – Close the temporary pairing window immediately.
+* `isPairingWindowOpen()` – True while the temporary pairing window is still active.
+
+Notes:
+* Pairing policies matter only for secure modes (`JustWorks`, `PasskeyDisplay`). With `Security::None`, the library does not gate clients by bond state.
+* Existing users do not need to change code. `begin(mode, deviceName, securityMode)` still behaves as before because the default pairing policy is `AlwaysOpen`.
+* Typical appliance flow: initialize with `BondedOnly`, then call `openPairingWindow(60000)` when a hardware button is pressed.
 
 ### Diagnostics / Logging
 
@@ -59,6 +80,8 @@ Supported security is None, JustWorks and PasskeyDisplay.
 * getTxFree() / getRxFree() – Remaining free space in TX / RX rings.
 * getTxDrops() / getRxDrops() – Dropped bytes due to buffer saturation.
 * getLowWaterMark() / getHighWaterMark() – Current low/high water marks used for TX flow control.
+* getPairingPolicy() – Current onboarding policy for new peers.
+* isPairingWindowOpen() – True while new peer pairing is temporarily permitted.
 
 ### Flow Control Concepts
 

@@ -30,7 +30,7 @@ Installation occurs through the Arduino library manager.
 ## Dependencies
 
 - [NimBLE-Arduino](https://github.com/h2zero/NimBLE-Arduino)
-- RingBuffer (provided)
+- [UUtzinger_RingBuffer](https://github.com/uutzinger/Arduino_RingBuffer)
 
 ## Quick Start
 

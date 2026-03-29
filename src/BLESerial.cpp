@@ -57,6 +57,15 @@ static const char *hsCodeName(int code) {
   }
 } // end of hsCodeName
 
+static const char *pairingPolicyName(PairingPolicy policy) {
+  switch (policy) {
+    case PairingPolicy::AlwaysOpen: return "AlwaysOpen";
+    case PairingPolicy::Windowed:   return "Windowed";
+    case PairingPolicy::BondedOnly: return "BondedOnly";
+    default:                        return "Unknown";
+  }
+}
+
 
 BLESerial *BLESerial::active = nullptr;
 
@@ -71,6 +80,8 @@ public:
   void onConnect(NimBLEServer *srv, NimBLEConnInfo &connInfo) override{
     if (!owner) return;
     auto &s = *owner;
+
+    s.expirePairingWindowIfNeeded();
 
     // Peer address as string
     s.peerAddr        = connInfo.getAddress().toString();
@@ -171,6 +182,23 @@ public:
                     s.connItvlUnits * 1.25f, s.connLatency, (unsigned long)s.perEventShareUs);
     }
 
+    if (!s.shouldAcceptPeer(connInfo)) {
+      if (s.logLevel >= WARNING) {
+        Serial.printf(
+          "BLESerial: Rejecting unbonded peer %s "
+          "(policy=%s pairing_window=%s).\r\n",
+          s.peerAddr.c_str(),
+          pairingPolicyName(s.pairingPolicy),
+          s.isPairingWindowOpen() ? "open" : "closed");
+      }
+      srv->disconnect(s.connHandle);
+      return;
+    }
+
+    if (s.secure == Security::PasskeyDisplay && !connInfo.isBonded()) {
+      s.refreshPasskey();
+    }
+
     // Start security if enabled
     if (s.secure != Security::None) NimBLEDevice::startSecurity(s.connHandle);
 
@@ -244,6 +272,9 @@ public:
     // lkgIntervalUs
     // sendIntervalUs will be >= minSendIntervalUS
     // probing/backoff state reset    
+
+    s.expirePairingWindowIfNeeded();
+    s.applyPairingPolicy(false);
 
     // Restart advertising
     if (s.advertising) {
@@ -1043,14 +1074,12 @@ bool BLESerial::begin(Mode newMode, const char *deviceName, Security newSecure)
       llTxOctets, llTxTimeUs);
   }
 
+  // Seed the PRNG before any security material is generated.
+  randomSeed(((uint32_t)analogRead(0)) ^ micros());
+
   // Security posture
   if (secure == Security::PasskeyDisplay) {
     NimBLEDevice::setSecurityAuth(/*bonding*/ true, /*mitm*/ true, /*sc*/ true);
-
-    // Generate random 6-digit code; ensure leading zeros possible on display
-    uint32_t key = (uint32_t)random(0UL, 1000000UL);
-    passkey = key;
-    NimBLEDevice::setSecurityPasskey(key);
 
     // IO capability: display only (ESP_IO_CAP_OUT)
     NimBLEDevice::setSecurityIOCap(BLE_HS_IO_DISPLAY_ONLY); /** Display only passkey */
@@ -1063,7 +1092,7 @@ bool BLESerial::begin(Mode newMode, const char *deviceName, Security newSecure)
         "BLESerial: Secure passkey connection initialized.\r\n");
     }
   } else if (secure == Security::JustWorks) {
-    NimBLEDevice::setSecurityAuth(/*bonding*/ true, /*mitm*/ false, /*sc*/ false);
+    NimBLEDevice::setSecurityAuth(/*bonding*/ true, /*mitm*/ false, /*sc*/ true);
     // IO capability: no input/output (ESP_IO_CAP_NONE)
     NimBLEDevice::setSecurityIOCap(BLE_HS_IO_NO_INPUT_OUTPUT); /** Just works */
 
@@ -1190,6 +1219,8 @@ bool BLESerial::begin(Mode newMode, const char *deviceName, Security newSecure)
   scanData.setManufacturerData(std::string((const char *)mfg, sizeof(mfg)));
   advertising->setAdvertisementData(advData);
   advertising->setScanResponseData(scanData);
+  expirePairingWindowIfNeeded();
+  applyPairingPolicy(false);
   advertising->start();
   if (logLevel >= INFO) {
     Serial.print("BLESerial: Advertising started.\r\n");
@@ -1210,13 +1241,20 @@ bool BLESerial::begin(Mode newMode, const char *deviceName, Security newSecure)
   if (logLevel >= INFO) {
     Serial.printf("BLESerial: MAC=%s.\r\n", deviceMac.c_str());
   }
-
-  randomSeed(analogRead(0));
   if (logLevel >= INFO) {
     Serial.print("BLESerial: Initialization completed.\r\n");
   }
 
   return true;
+}
+
+bool BLESerial::begin(Mode newMode,
+                      const char *deviceName,
+                      Security newSecure,
+                      PairingPolicy newPairingPolicy)
+{
+  pairingPolicy = newPairingPolicy;
+  return begin(newMode, deviceName, newSecure);
 }
 
 // ===== BLESerial end() ========================================================================
@@ -1262,6 +1300,8 @@ void BLESerial::end()
   codedScheme        = 0;
   desiredCodedScheme = 0;
   connHandle         = BLE_HS_CONN_HANDLE_NONE;
+  pairingWindowOpen  = false;
+  pairingWindowUntilMs = 0;
 
   // Reset pacing/timing
   TX_CRITICAL_ENTER(this); // ----------------
@@ -1309,6 +1349,123 @@ void BLESerial::end()
     Serial.println(
       "BLESerial ended: BLE deinitialized and resources released.");
   }
+}
+
+void BLESerial::setPairingPolicy(PairingPolicy policy) {
+  pairingPolicy = policy;
+  expirePairingWindowIfNeeded();
+  applyPairingPolicy();
+}
+
+bool BLESerial::openPairingWindow(uint32_t durationMs) {
+  if (durationMs == 0) {
+    closePairingWindow();
+    return false;
+  }
+
+  pairingWindowOpen    = true;
+  pairingWindowUntilMs = millis() + durationMs;
+
+  if (logLevel >= INFO) {
+    Serial.printf("BLESerial: Pairing window opened for %lu ms.\r\n",
+                  (unsigned long)durationMs);
+  }
+
+  applyPairingPolicy();
+
+  #ifdef ARDUINO_ARCH_ESP32
+    if (pumpMode == PumpMode::Task) {
+      startRSSITask();
+      wakeRSSITask();
+    }
+  #endif
+
+  return true;
+}
+
+void BLESerial::closePairingWindow() {
+  const bool wasOpen = isPairingWindowOpen() || pairingWindowOpen;
+  pairingWindowOpen = false;
+  pairingWindowUntilMs = 0;
+
+  if (wasOpen && logLevel >= INFO) {
+    Serial.println("BLESerial: Pairing window closed.");
+  }
+
+  applyPairingPolicy();
+}
+
+bool BLESerial::isPairingWindowOpen() const {
+  if (!pairingWindowOpen) return false;
+  return (int32_t)(millis() - pairingWindowUntilMs) < 0;
+}
+
+bool BLESerial::shouldAllowUnbondedPeer() const {
+  if (secure == Security::None) return true;
+  if (pairingPolicy == PairingPolicy::AlwaysOpen) return true;
+  return isPairingWindowOpen();
+}
+
+bool BLESerial::shouldAcceptPeer(const NimBLEConnInfo &connInfo) const {
+  if (secure == Security::None) return true;
+  if (connInfo.isBonded()) return true;
+  return shouldAllowUnbondedPeer();
+}
+
+void BLESerial::refreshPasskey() {
+  passkey = (uint32_t)random(0UL, 1000000UL);
+  NimBLEDevice::setSecurityPasskey(passkey);
+
+  if (logLevel >= INFO) {
+    Serial.printf("BLESerial: Refreshed passkey for pairing: %06u.\r\n", passkey);
+  }
+}
+
+void BLESerial::expirePairingWindowIfNeeded() {
+  if (!pairingWindowOpen) return;
+  if (isPairingWindowOpen()) return;
+
+  pairingWindowOpen = false;
+  pairingWindowUntilMs = 0;
+
+  if (logLevel >= INFO) {
+    Serial.println("BLESerial: Pairing window expired.");
+  }
+
+  applyPairingPolicy();
+}
+
+void BLESerial::syncWhiteListFromBonds() {
+  if (!NimBLEDevice::isInitialized()) return;
+
+  while (NimBLEDevice::getWhiteListCount() > 0) {
+    NimBLEAddress addr = NimBLEDevice::getWhiteListAddress(0);
+    if (!NimBLEDevice::whiteListRemove(addr)) {
+      break;
+    }
+  }
+
+  const int bondCount = NimBLEDevice::getNumBonds();
+  for (int i = 0; i < bondCount; ++i) {
+    NimBLEDevice::whiteListAdd(NimBLEDevice::getBondedAddress(i));
+  }
+}
+
+void BLESerial::applyPairingPolicy(bool restartAdvertising) {
+  if (advertising == nullptr || !NimBLEDevice::isInitialized()) return;
+
+  const bool allowUnbonded = shouldAllowUnbondedPeer();
+  if (secure == Security::None || allowUnbonded) {
+    advertising->setScanFilter(false, false);
+  } else {
+    syncWhiteListFromBonds();
+    advertising->setScanFilter(false, true);
+  }
+
+  if (!restartAdvertising || isConnected() || !advertising->isAdvertising()) return;
+
+  advertising->stop();
+  advertising->start();
 }
 
 // ===== BLESerial read/write/flush =============================================================
@@ -1503,6 +1660,7 @@ size_t BLESerial::printf(const char *fmt, ...) {
 
 // Report statistics
 void BLESerial::printStats(Stream &out) {
+  expirePairingWindowIfNeeded();
   out.print(F("BLESerial Stats:\r\n"));
 
   out.print(F("  Mode: "));
@@ -1518,6 +1676,11 @@ void BLESerial::printStats(Stream &out) {
   if (secure == Security::PasskeyDisplay)  out.print(F("PasskeyDisplay"));
   else if (secure == Security::JustWorks)  out.print(F("JustWorks"));
   else                                     out.print(F("None"));
+  out.print(F("  PairingPolicy: "));
+  out.print(pairingPolicyName(pairingPolicy));
+  out.print(F("  PairingWindow: "));
+  out.print(isPairingWindowOpen() ? F("open") : F("closed"));
+  out.print(F("\r\n"));
 
   // Link summary
   out.print(F("  Link: connected="));
@@ -1654,6 +1817,7 @@ const char* BLESerial::phyToStr() const {
 // ===== Tx Pump ================================================================================
 
 void BLESerial::update() {
+  expirePairingWindowIfNeeded();
   #ifdef ARDUINO_ARCH_ESP32
     // Use portable polling pump and not ESP32 FreeRTOS task
     if (pumpMode == PumpMode::Polling)
@@ -1837,9 +2001,14 @@ void BLESerial::RSSITask(void *arg) {
   }
   BLESerial &s = *self;
   for (;;) {
+    s.expirePairingWindowIfNeeded();
+
     if (s.isConnected()) {
       s.adjustLink();
+    } else if (!s.isPairingWindowOpen()) {
+      vTaskSuspend(nullptr);
     }
+
     vTaskDelay(pdMS_TO_TICKS(RSSI_INTERVAL_MS));
   }
 #endif
@@ -1895,7 +2064,7 @@ void BLESerial::wakeRSSITask() {
 
 void BLESerial::suspendRSSITask() {
 #ifdef ARDUINO_ARCH_ESP32
-  if (rssiTaskHandle) {
+  if (rssiTaskHandle && !isPairingWindowOpen()) {
     vTaskSuspend(rssiTaskHandle);
   }
 #endif
@@ -3298,5 +3467,3 @@ void BLESerial::setPower(int8_t dBm, NimBLETxPowerType scope) {
       dBm, (int)scope);
   }
 }
-
-

@@ -57,7 +57,7 @@ extern "C" {
 /* Constants   */
 /******************************************************************************************************/
 
-#define BLE_SERIAL_VERSION_STRING "BLE Serial Library v1.1.2"
+#define BLE_SERIAL_VERSION_STRING "BLE Serial Library v1.2.0"
 #define BLE_SERIAL_APPEARANCE 0x0540 // Generic Sensor
 
 // Log levels: ascending by verbosity for comparisons like (logLevel >= LEVEL)
@@ -217,6 +217,12 @@ enum class Security {
   PasskeyDisplay
 };
 
+enum class PairingPolicy {
+  AlwaysOpen,
+  Windowed,
+  BondedOnly
+};
+
 enum class PumpMode { 
   Polling, 
   Task 
@@ -253,6 +259,8 @@ public:
   using Mode = ::Mode;
   // Provide a nested alias so user code can refer to BLESerial::Security
   using Security = ::Security;
+  // Provide a nested alias so user code can refer to BLESerial::PairingPolicy
+  using PairingPolicy = ::PairingPolicy;
   // Provide a nested alias so user code can refer to BLESerial::PumpMode
   using PumpMode = ::PumpMode;
   // Provide a nested alias so user code can refer to BLESerial::TxState
@@ -266,6 +274,11 @@ public:
               const char*  deviceName = "BLESerialDevice",
               Security     secure     = Security::None);  
            // init stack, create service, start advertising
+  bool     begin(Mode          mode,
+              const char*      deviceName,
+              Security         secure,
+              PairingPolicy    pairingPolicy);
+           // init stack, create service, start advertising with explicit pairing policy
   void     end();                                       
            // stop advertising, dispose service/server
 
@@ -324,6 +337,15 @@ public:
            // Note: After negotiation, txChunkSize and timing are updated when the MTU change event arrives.
   void     setPower(int8_t dBm, NimBLETxPowerType scope = PWR_ALL); 
            // change radio power for adv/scan/conn/all 3
+  void     setPairingPolicy(PairingPolicy policy);
+           // set onboarding policy for new peers; existing bonds are always accepted
+  PairingPolicy getPairingPolicy() const { return pairingPolicy; }
+  bool     openPairingWindow(uint32_t durationMs = 60000);
+           // temporarily allow new peers to pair for durationMs
+  void     closePairingWindow();
+           // close temporary pairing window and return to current policy
+  bool     isPairingWindowOpen() const;
+           // true while temporary pairing window is active
 
   // ----------------------------------------------------------------------------------------------
   // Pump / scheduling (Polling vs Task)
@@ -529,10 +551,13 @@ private:
   Mode              mode              = Mode::Fast;
   TxState           txState           = TxState::Waiting;
   Security          secure            = Security::None;
+  PairingPolicy     pairingPolicy     = PairingPolicy::AlwaysOpen;
   uint8_t           logLevel          = INFO;
 
   // Security
   uint32_t          passkey           = 0; // stores the currently displayed/generated 6-digit passkey
+  bool              pairingWindowOpen = false;
+  uint32_t          pairingWindowUntilMs = 0;
 
   // RSSI polling
   volatile int8_t   rssiRaw           = 0;
@@ -564,6 +589,12 @@ private:
                     // returns MIC bytes for given security level
   uint32_t          computePerEventShareUs(uint32_t connInt, uint16_t connLat, uint32_t pdus_per_window);
                     // recompute per-event share based on current conn params
+  bool              shouldAllowUnbondedPeer() const;
+  bool              shouldAcceptPeer(const NimBLEConnInfo& connInfo) const;
+  void              refreshPasskey();
+  void              expirePairingWindowIfNeeded();
+  void              applyPairingPolicy(bool restartAdvertising = true);
+  void              syncWhiteListFromBonds();
 
     // Background TX task helpers (ESP32)
   #ifdef ARDUINO_ARCH_ESP32
@@ -609,4 +640,3 @@ private:
 };
 
 #endif // BLE_SERIAL_H
-
