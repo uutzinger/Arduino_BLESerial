@@ -17,3 +17,34 @@ After onMessageTooBig, confirm:
 - sendIntervalUs >= minSendIntervalUS.
 - probing disabled and cooldown set.
 
+### Use Logger library
+
+- setLogLevel(), getLogLevel() should convert to logger's logSetLevel/getLevel function.
+
+- log output should use standrad logger library format. e.g.[INFO] BLESerial: ....
+
+- DEBUG should not be a numeric and BLESerial should use the #define DEBUG option to enable it. If DEBUG is not declared, LOGD should no be compiled into the program.
+
+- The function calls should use LOG..() syntax and if possible. If possible no new loglevel macros should be creteated e.g. no BLE_SERIAL_LOG_NONE
+
+if (logLevel >= INFO) {
+  Serial.printf("BLESerial: ...\r\n", ...);
+}
+
+should become
+
+LOGI("...", ...);
+
+- [INFO] shall be proceeded with the library name BLESerial:
+
+- When multiple line logging is present consider using multiple LOG statements.
+
+- If multiple LOG statements are needed that combine into single line consider useing LOGIS,LOGIC and LOGIE.
+
+- Update docs
+
+- Verify build
+
+- Do not remove stale comments
+
+- Change logging also in commented out sections.

@@ -177,20 +177,16 @@ public:
     // sendIntervalUs will be >= minSendIntervalUS
     // probing/backoff state reset    
 
-    if (s.getLogLevel() >= INFO) {
-      Serial.printf("BLESerial: Connected: interval=%.2f ms, latency=%u, perEventShare=%lu µs\r\n",
-                    s.connItvlUnits * 1.25f, s.connLatency, (unsigned long)s.perEventShareUs);
-    }
+    LOGI("BLESerial: Connected: interval=%.2f ms, latency=%u, perEventShare=%lu µs",
+         s.connItvlUnits * 1.25f, s.connLatency, (unsigned long)s.perEventShareUs);
 
     if (!s.shouldAcceptPeer(connInfo)) {
-      if (s.logLevel >= WARNING) {
-        Serial.printf(
-          "BLESerial: Rejecting unbonded peer %s "
-          "(policy=%s pairing_window=%s).\r\n",
-          s.peerAddr.c_str(),
-          pairingPolicyName(s.pairingPolicy),
-          s.isPairingWindowOpen() ? "open" : "closed");
-      }
+      LOGW(
+        "BLESerial: Rejecting unbonded peer %s "
+        "(policy=%s pairing_window=%s).",
+        s.peerAddr.c_str(),
+        pairingPolicyName(s.pairingPolicy),
+        s.isPairingWindowOpen() ? "open" : "closed");
       srv->disconnect(s.connHandle);
       return;
     }
@@ -208,18 +204,14 @@ public:
       s.wakeRSSITask();
     #endif
 
-    if (s.logLevel >= INFO) {
-      Serial.printf(
-        "BLESerial: Connected %s PHY=%s.\r\n"
-        "           chunk=%u send_interval=%uµs min_send_interval=%uµs.\r\n"
-        "           llTx: octets=%u time=%uµs | llRx: octets=%u time=%uµs.\r\n",
-        s.peerAddr.c_str(),
-        s.phyToStr(),
-        (unsigned)s.txChunkSize, (unsigned)s.sendIntervalUs,(unsigned)s.minSendIntervalUS,
-        (unsigned)s.llTxOctets,(unsigned)s.llTxTimeUs,
-        (unsigned)s.llRxOctets,(unsigned)s.llRxTimeUs
-      );
-    }
+    LOGI("BLESerial: Connected %s PHY=%s.",
+         s.peerAddr.c_str(),
+         s.phyToStr());
+    LOGI("BLESerial: chunk=%u send_interval=%uµs min_send_interval=%uµs.",
+         (unsigned)s.txChunkSize, (unsigned)s.sendIntervalUs, (unsigned)s.minSendIntervalUS);
+    LOGI("BLESerial: llTx: octets=%u time=%uµs | llRx: octets=%u time=%uµs.",
+         (unsigned)s.llTxOctets, (unsigned)s.llTxTimeUs,
+         (unsigned)s.llRxOctets, (unsigned)s.llRxTimeUs);
     if (s.onClientConnect) s.onClientConnect(s.peerAddr); // user provided addon callback
   }
 
@@ -288,16 +280,13 @@ public:
       s.suspendRSSITask();
     #endif
 
-    if (s.logLevel >= INFO) {
-      const uint8_t hci = static_cast<uint8_t>(reason & 0xFF);
-      Serial.printf(
-        "BLESerial: Client [%s] disconnected "
-        "(reason=%u %s). Advertising restarted.\r\n",
-        connInfo.getAddress().toString().c_str(),
-        hci, hciDisconnectReasonStr(hci));
-    }
+    const uint8_t hci = static_cast<uint8_t>(reason & 0xFF);
+    LOGI(
+      "BLESerial: Client [%s] disconnected "
+      "(reason=%u %s). Advertising restarted.",
+      connInfo.getAddress().toString().c_str(),
+      hci, hciDisconnectReasonStr(hci));
     if (s.onClientDisconnect) {
-      const uint8_t hci = static_cast<uint8_t>(reason & 0xFF);
       s.onClientDisconnect(connInfo.getAddress().toString(), hci); // user provided addon callback
     }
   }
@@ -323,13 +312,11 @@ public:
     // if (s.rxChar) s.rxChar->setMaxLen(attMax);
     // if (s.txChar) s.txChar->setMaxLen(attMax);
 
-    if (s.logLevel >= INFO) {
-      Serial.printf(
-        "BLESerial: MTU=%u (conn=%u), " 
-        "tx_chunk_size=%u, min_send_interval=%uµs.\r\n",
-        m, connInfo.getConnHandle(), 
-        s.txChunkSize, (unsigned)s.minSendIntervalUS);
-    }
+    LOGI(
+      "BLESerial: MTU=%u (conn=%u), "
+      "tx_chunk_size=%u, min_send_interval=%uµs.",
+      m, connInfo.getConnHandle(),
+      s.txChunkSize, (unsigned)s.minSendIntervalUS);
     if (s.onMtuChanged) s.onMtuChanged(m); // user provided addon callback
   }
 
@@ -344,9 +331,7 @@ public:
   //   uint32_t key = (uint32_t)random(0UL, 1000000UL);
   //   s.passkey = key;
 
-  //   if (s.logLevel >= INFO) {
-  //       Serial.printf("BLESerial: Server Passkey Request: %06u\r\n", key);
-  //   }
+  //   LOGI("BLESerial: Server Passkey Request: %06u", key);
   //   return key;
   // }
 
@@ -355,10 +340,7 @@ public:
     if (!owner) return 0;
     auto &s = *owner;
 
-    if (s.logLevel >= INFO) {
-      Serial.printf(
-        "BLESerial: Server Passkey: %06u.\r\n", s.passkey);
-    }
+    LOGI("BLESerial: Server Passkey: %06u.", s.passkey);
     return s.passkey;
   }
 
@@ -370,13 +352,11 @@ public:
     bool match = (peerKey == s.passkey);
     NimBLEDevice::injectConfirmPasskey(connInfo, match);
 
-    if (s.logLevel >= INFO) {
-      Serial.printf(
-        "BLESerial: Confirm Passkey: "
-        "local=%06u peer=%06u %s.\r\n",
-        s.passkey, peerKey, 
-        match ? "MATCH" : "MISMATCH");
-    }
+    LOGI(
+      "BLESerial: Confirm Passkey: "
+      "local=%06u peer=%06u %s.",
+      s.passkey, peerKey,
+      match ? "MATCH" : "MISMATCH");
   }
 
   void onAuthenticationComplete(NimBLEConnInfo &connInfo) override {
@@ -386,20 +366,14 @@ public:
     if (!connInfo.isEncrypted()) {
       s.linkEncrypted = false;
       NimBLEDevice::getServer()->disconnect(connInfo.getConnHandle());
-      if (s.logLevel >= WARNING) {
-        Serial.println(
-          "BLESerial: Encrypt connection failed - disconnecting client.");
-      }
+      LOGW("BLESerial: Encrypt connection failed - disconnecting client.");
       return;
     }
 
     s.linkEncrypted = true;
 
-    if (s.logLevel >= INFO) {
-      Serial.printf(
-        "BLESerial: Secured connection to: %s.\r\n", 
-        connInfo.getAddress().toString().c_str());
-    }
+    LOGI("BLESerial: Secured connection to: %s.",
+         connInfo.getAddress().toString().c_str());
   }
 
   void onConnParamsUpdate(NimBLEConnInfo &connInfo) override {
@@ -417,10 +391,8 @@ public:
                     
     s.updateTxTiming();
 
-    if (s.getLogLevel() >= INFO) {
-      Serial.printf("BLESerial: Conn params updated: interval=%.2f ms, latency=%u, perEventShare=%lu µs\r\n",
-                    s.connItvlUnits * 1.25f, s.connLatency, (unsigned long)s.perEventShareUs);
-    }
+    LOGI("BLESerial: Conn params updated: interval=%.2f ms, latency=%u, perEventShare=%lu µs",
+         s.connItvlUnits * 1.25f, s.connLatency, (unsigned long)s.perEventShareUs);
   }
 
   void onPhyUpdate(NimBLEConnInfo &connInfo, uint8_t txPhy, uint8_t rxPhy) override {
@@ -432,11 +404,8 @@ public:
 
   void onIdentity(NimBLEConnInfo &connInfo) override {
     if (!owner) return;
-    if (owner->getLogLevel() >= INFO) {
-      Serial.printf(
-        "BLESerial: Identity resolved: %s.\r\n",
-        connInfo.getAddress().toString().c_str());
-    }
+    LOGI("BLESerial: Identity resolved: %s.",
+         connInfo.getAddress().toString().c_str());
   }
 
 private:
@@ -626,15 +595,14 @@ public:
     bool indicate      = (subValue & 0x0002);
     s.clientSubscribed = notify || indicate;
 
-    if (s.logLevel >= INFO) {
+    if (logGetLevel() >= LOG_LEVEL_INFO) {
       std::string uuid = ch->getUUID().toString();
       if (subValue == 0)
-        Serial.printf(
-          "BLESerial: Client %s unsubscribed %s.\r\n", 
-          s.peerAddr.c_str(), uuid.c_str());
+        LOGI("BLESerial: Client %s unsubscribed %s.",
+             s.peerAddr.c_str(), uuid.c_str());
       else
-        Serial.printf(
-          "BLESerial: Client %s subscribed (%s%s) %s.\r\n",
+        LOGI(
+          "BLESerial: Client %s subscribed (%s%s) %s.",
           s.peerAddr.c_str(),
           notify ? "notify" : "",
           indicate ? (notify ? "+indicate" : "indicate") : "",
@@ -740,17 +708,13 @@ int BLESerial::gapEventHandler(struct ble_gap_event *ev, void * /*arg*/) {
 
       // Early return if PHY/coding unchanged (suppress redundant recompute/log)
       if (prev2M == s.phyIs2M && prevCoded == s.phyIsCoded && prevScheme == s.codedScheme) {
-        if (s.logLevel >= DEBUG) {
-          Serial.printf(
-            "BLESerial: %s: \r\n"
-            "           tx=%u, rx=%u, (%s), llTxTime=%uµs, tx_chunk_size=%u, min_send_interval=%uµs.\r\n",
-            "PHY unchanged (GAP)",
-            p.tx_phy, p.rx_phy, s.phyToStr(),
-            (unsigned)s.llTxTimeUs,
-            (unsigned)s.txChunkSize,
-            (unsigned)s.minSendIntervalUS
-          );
-        }
+        LOGD("BLESerial: PHY unchanged (GAP):");
+        LOGD(
+          "BLESerial: tx=%u, rx=%u, (%s), llTxTime=%uµs, tx_chunk_size=%u, min_send_interval=%uµs.",
+          p.tx_phy, p.rx_phy, s.phyToStr(),
+          (unsigned)s.llTxTimeUs,
+          (unsigned)s.txChunkSize,
+          (unsigned)s.minSendIntervalUS);
         return 0;
       }
 
@@ -762,17 +726,13 @@ int BLESerial::gapEventHandler(struct ble_gap_event *ev, void * /*arg*/) {
       // sendIntervalUs
       // probing/backoff state reset
 
-      if (s.logLevel >= INFO) {
-        Serial.printf(
-          "BLESerial: %s: \r\n"
-          "           tx=%u, rx=%u, (%s), llTxTime=%uµs, tx_chunk_size=%u, min_send_interval=%uµs.\r\n",
-          "PHY updated (GAP)",
-          p.tx_phy, p.rx_phy, s.phyToStr(),
-          (unsigned)s.llTxTimeUs,
-          (unsigned)s.txChunkSize,
-          (unsigned)s.minSendIntervalUS
-        );
-      }
+      LOGI("BLESerial: PHY updated (GAP):");
+      LOGI(
+        "BLESerial: tx=%u, rx=%u, (%s), llTxTime=%uµs, tx_chunk_size=%u, min_send_interval=%uµs.",
+        p.tx_phy, p.rx_phy, s.phyToStr(),
+        (unsigned)s.llTxTimeUs,
+        (unsigned)s.txChunkSize,
+        (unsigned)s.minSendIntervalUS);
 
       #ifdef ARDUINO_ARCH_ESP32
         if (s.pumpMode == PumpMode::Task) {
@@ -788,13 +748,11 @@ int BLESerial::gapEventHandler(struct ble_gap_event *ev, void * /*arg*/) {
     // {
     //   // // Peer proposes new data-lengths; don't apply immediately — wait for DATA_LEN_CHG which is authoritative.
     //   // const auto &q = ev->l2cap_update_req; // fields similar to data_len_chg (proposal)
-    //   // if (s.logLevel >= INFO) {
-    //   //   Serial.printf(
-    //   //     "BLESerial: L2CAP DLE proposal: "
-    //   //     "tx_octets=%u tx_time=%uµs rx_octets=%u rx_time=%uµs\r\n",
-    //   //     (unsigned)q.tx_octets, (unsigned)q.tx_time,
-    //   //     (unsigned)q.rx_octets, (unsigned)q.rx_time);
-    //   // }
+    //   // LOGI(
+    //   //   "BLESerial: L2CAP DLE proposal: "
+    //   //   "tx_octets=%u tx_time=%uµs rx_octets=%u rx_time=%uµs",
+    //   //   (unsigned)q.tx_octets, (unsigned)q.tx_time,
+    //   //   (unsigned)q.rx_octets, (unsigned)q.rx_time);
     //   // // No state change here; DATA_LEN_CHG will follow with negotiated values.
     //   // This variant is not available in this NimBLE build; ignore gracefully.
     //   (void)ev;      return 0;
@@ -831,7 +789,7 @@ int BLESerial::gapEventHandler(struct ble_gap_event *ev, void * /*arg*/) {
       // sendIntervalUs
       // probing/backoff state reset
 
-      if (s.logLevel >= INFO) {
+      if (logGetLevel() >= LOG_LEVEL_INFO) {
         // Compute diagnostic sizing to confirm single-LL-PDU chunks
         const uint16_t attPayloadMax = (s.mtu > BLE_SERIAL_ATT_HDR_BYTES)
                                          ? (uint16_t)std::min<uint32_t>(BLE_SERIAL_MAX_GATT, (uint32_t)s.mtu - BLE_SERIAL_ATT_HDR_BYTES)
@@ -844,20 +802,18 @@ int BLESerial::gapEventHandler(struct ble_gap_event *ev, void * /*arg*/) {
         const uint32_t sduBytes = (uint32_t)s.txChunkSize + BLE_SERIAL_L2CAP_HDR_BYTES + BLE_SERIAL_ATT_HDR_BYTES;
         const bool fitsSingle = (M > 0) && (sduBytes <= M);
 
-        Serial.printf(
-          "BLESerial: DLE updated:\r\n"
-          "           tx %u→%u octets, %u→%uµs; mtu=%u\r\n"
-          "           max_att_payload=%u, max_one_PDU_payload=%u\r\n"
-          "           sdu_size=%u, sdu_bytes_per_full_ll_pdu=%u, fits_single_LL_PDU=%s\r\n"
-          "           tx_chunk_size=%u, min_send_interval=%uµs.\r\n",
-          (unsigned)oldTxOctets, (unsigned)s.llTxOctets,
-          (unsigned)oldTxTimeUs, (unsigned)s.llTxTimeUs,
-          (unsigned)s.mtu,
-          (unsigned)attPayloadMax, (unsigned)onePduMaxPayload,
-          (unsigned)sduBytes, (unsigned)M,
-          fitsSingle ? "YES" : "NO",
-          (unsigned)s.txChunkSize, (unsigned)s.minSendIntervalUS
-        );
+        LOGI("BLESerial: DLE updated:");
+        LOGI("BLESerial: tx %u->%u octets, %u->%uµs; mtu=%u",
+             (unsigned)oldTxOctets, (unsigned)s.llTxOctets,
+             (unsigned)oldTxTimeUs, (unsigned)s.llTxTimeUs,
+             (unsigned)s.mtu);
+        LOGI("BLESerial: max_att_payload=%u, max_one_PDU_payload=%u",
+             (unsigned)attPayloadMax, (unsigned)onePduMaxPayload);
+        LOGI("BLESerial: sdu_size=%u, sdu_bytes_per_full_ll_pdu=%u, fits_single_LL_PDU=%s",
+             (unsigned)sduBytes, (unsigned)M,
+             fitsSingle ? "YES" : "NO");
+        LOGI("BLESerial: tx_chunk_size=%u, min_send_interval=%uµs.",
+             (unsigned)s.txChunkSize, (unsigned)s.minSendIntervalUS);
       }
       #ifdef ARDUINO_ARCH_ESP32
         if (s.pumpMode == PumpMode::Task) {
@@ -881,12 +837,9 @@ int BLESerial::gapEventHandler(struct ble_gap_event *ev, void * /*arg*/) {
       // sendIntervalUs
       // probing/backoff state reset
 
-      if (s.logLevel >= INFO) {
-        Serial.printf(
-          "BLESerial: MTU=%u, tx_chunk_size=%u, min_send_interval=%uµs.\r\n",
-          (unsigned)mtu, (unsigned)s.txChunkSize, (unsigned)s.minSendIntervalUS
-        );
-      }
+      LOGI(
+        "BLESerial: MTU=%u, tx_chunk_size=%u, min_send_interval=%uµs.",
+        (unsigned)mtu, (unsigned)s.txChunkSize, (unsigned)s.minSendIntervalUS);
       return 0;
     }
 
@@ -911,15 +864,12 @@ int BLESerial::gapEventHandler(struct ble_gap_event *ev, void * /*arg*/) {
 
       // // s.updateTxTiming();
 
-      // if (s.logLevel >= INFO) {
-      //   Serial.printf(
-      //     "BLESerial: Connection parameters updated (GAP):\r\n"
-      //     "           interval=%dµs, latency=%u, timeout=%ums.\r\n",
-      //     s.connIntervalUs,
-      //     s.connLatency,
-      //     s.supervisionTimeoutMS
-      //   );
-      // }
+      // LOGI("BLESerial: Connection parameters updated (GAP):");
+      // LOGI(
+      //   "BLESerial: interval=%dµs, latency=%u, timeout=%ums.",
+      //   s.connIntervalUs,
+      //   s.connLatency,
+      //   s.supervisionTimeoutMS);
       // Some NimBLE builds don’t expose conn_itvl/conn_latency/supervision_timeout here.
       // We already log updates in ServerCallbacks::onConnParamsUpdate(). No-op.
       (void)ev;
@@ -950,7 +900,7 @@ bool BLESerial::begin(Mode newMode, const char *deviceName, Security newSecure)
   // Minimal init; full feature set can be added incrementally
   mode = newMode;
   secure = newSecure;
-  logLevel = INFO;
+  logSetLevel(LOG_LEVEL_INFO);
 
   BLESerial::active = this; // allow static GAP handler to reach our instance
 
@@ -1009,25 +959,16 @@ bool BLESerial::begin(Mode newMode, const char *deviceName, Security newSecure)
 
   // BLE: init stack, create service, start adv; UART: config UART
   NimBLEDevice::init(deviceName);
-  if (logLevel >= INFO) {
-    Serial.printf(
-      "BLESerial: Device created with name %s.\r\n", deviceName);
-  }
+  LOGI("BLESerial: Device created with name %s.", deviceName);
   NimBLEDevice::setCustomGapHandler(&BLESerial::gapEventHandler);
-  if (logLevel >= INFO) {
-    Serial.print("BLESerial: Custom Gap handler set.\r\n");
-  }
+  LOGI("BLESerial: Custom Gap handler set.");
   NimBLEDevice::setMTU(mtu);
-  if (logLevel >= INFO) {
-    Serial.printf("BLESerial: MTU set to %u.\r\n", mtu);
-  }
+  LOGI("BLESerial: MTU set to %u.", mtu);
 
   NimBLEDevice::setPower(dBmAdv, PWR_ADV);
   NimBLEDevice::setPower(dBmScan, PWR_SCAN);
   NimBLEDevice::setPower(dBmConn, PWR_CONN);
-  if (logLevel >= INFO) {
-    Serial.printf("BLESerial: Power levels set: Adv=%d, Scan=%d, Conn=%d.\r\n", dBmAdv, dBmScan, dBmConn);
-  }
+  LOGI("BLESerial: Power levels set: Adv=%d, Scan=%d, Conn=%d.", dBmAdv, dBmScan, dBmConn);
 
   powerAdv  = NimBLEDevice::getPower(PWR_ADV);
   powerScan = NimBLEDevice::getPower(PWR_SCAN);
@@ -1043,36 +984,28 @@ bool BLESerial::begin(Mode newMode, const char *deviceName, Security newSecure)
   if (secure == Security::PasskeyDisplay ||
       secure == Security::JustWorks) {
     NimBLEDevice::setOwnAddrType(BLE_OWN_ADDR_RPA_PUBLIC_DEFAULT);
-    if (logLevel >= INFO) {
-      Serial.print("BLESerial: Random address initialized.\r\n");
-    }
+    LOGI("BLESerial: Random address initialized.");
     // your client will need to reacquire the address each time you want to connect
   }
   else
   {
     NimBLEDevice::setOwnAddrType(BLE_OWN_ADDR_PUBLIC);
-    if (logLevel >= INFO)  {
-      Serial.print("BLESerial: Public address initialized.\r\n");
-    }
+    LOGI("BLESerial: Public address initialized.");
     // address remains static and can be reused by the client
   }
 
   NimBLEDevice::setDefaultPhy(desiredPhyMask, desiredPhyMask);
-  if (logLevel >= INFO) {
-    Serial.printf("BLESerial: Default PHY set to %u.\r\n", desiredPhyMask);
-  }
+  LOGI("BLESerial: Default PHY set to %u.", desiredPhyMask);
 
   // Suggested default data length: use safe, spec-aligned maximum (not dynamic). Typical: 251 octets, LL_DEFAULT_TIME_USµs.
   ble_gap_write_sugg_def_data_len(desiredllTxOctets, desiredllTxTimeUs);
 
   llTxOctets = desiredllTxOctets; // for now until negotiated at connection time
   llTxTimeUs = desiredllTxTimeUs; // for now until negotiated at connection time
-  if (logLevel >= INFO) {
-    Serial.printf(
-      "BLESerial: Suggested default data length set: "
-      "%u octets, %uµs.\r\n", 
-      llTxOctets, llTxTimeUs);
-  }
+  LOGI(
+    "BLESerial: Suggested default data length set: "
+    "%u octets, %uµs.",
+    llTxOctets, llTxTimeUs);
 
   // Seed the PRNG before any security material is generated.
   randomSeed(((uint32_t)analogRead(0)) ^ micros());
@@ -1087,10 +1020,7 @@ bool BLESerial::begin(Mode newMode, const char *deviceName, Security newSecure)
     // Key distribution (init/rsp) ~ ESP_BLE_SSET_INIT_KEY / SET_RSP_KEY
     NimBLEDevice::setSecurityInitKey(KEYDIST_ENC | KEYDIST_ID);
     NimBLEDevice::setSecurityRespKey(KEYDIST_ENC | KEYDIST_ID);
-    if (logLevel >= INFO) {
-      Serial.print(
-        "BLESerial: Secure passkey connection initialized.\r\n");
-    }
+    LOGI("BLESerial: Secure passkey connection initialized.");
   } else if (secure == Security::JustWorks) {
     NimBLEDevice::setSecurityAuth(/*bonding*/ true, /*mitm*/ false, /*sc*/ true);
     // IO capability: no input/output (ESP_IO_CAP_NONE)
@@ -1099,35 +1029,25 @@ bool BLESerial::begin(Mode newMode, const char *deviceName, Security newSecure)
     // Key distribution (init/rsp) ~ ESP_BLE_SSET_INIT_KEY / SET_RSP_KEY
     NimBLEDevice::setSecurityInitKey(KEYDIST_ENC | KEYDIST_ID);
     NimBLEDevice::setSecurityRespKey(KEYDIST_ENC | KEYDIST_ID);
-    if (logLevel >= INFO) {
-      Serial.print("BLESerial: Secure justworks connection initialized.\r\n");
-    }
+    LOGI("BLESerial: Secure justworks connection initialized.");
   } else if (secure == Security::None) {
     NimBLEDevice::setSecurityAuth(/*bonding*/ false, /*mitm*/ false, /*sc*/ false); // no pairing needed
-    if (logLevel >= INFO) {
-      Serial.print("BLESerial: Insecure connection initialized.\r\n");
-    }
+    LOGI("BLESerial: Insecure connection initialized.");
   }
 
   // Create server and service
   server = NimBLEDevice::createServer();
   if (!server) {
-    if (logLevel >= ERROR) {
-      Serial.print("BLESerial: ERROR: Server creation failed.\r\n");
-    }
+    LOGE("BLESerial: Server creation failed.");
     return false;
   }
   server->setCallbacks(new ServerCallbacks(this));
   service = server->createService(BLE_SERIAL_SERVICE_UUID);
   if (!service) {
-    if (logLevel >= ERROR) {
-      Serial.print("BLESerial: ERROR: Service creation failed.\r\n");
-    }
+    LOGE("BLESerial: Service creation failed.");
     return false;
   } else {
-    if (logLevel >= INFO) {
-      Serial.print("BLESerial: Server and Services created.\r\n");
-    }
+    LOGI("BLESerial: Server and Services created.");
   }
 
   // Characteristics
@@ -1145,9 +1065,7 @@ bool BLESerial::begin(Mode newMode, const char *deviceName, Security newSecure)
         NIMBLE_PROPERTY::NOTIFY |
         NIMBLE_PROPERTY::READ_ENC // require encryption for notify subscription
     );
-    if (logLevel >= INFO) {
-      Serial.print("BLESerial: Secure Rx and Tx services initialized.\r\n");
-    }
+    LOGI("BLESerial: Secure Rx and Tx services initialized.");
 
   } else {
     rxChar = service->createCharacteristic(
@@ -1158,15 +1076,11 @@ bool BLESerial::begin(Mode newMode, const char *deviceName, Security newSecure)
     txChar = service->createCharacteristic(
         BLE_SERIAL_CHARACTERISTIC_UUID_TX,
         NIMBLE_PROPERTY::NOTIFY);
-    if (logLevel >= INFO) {
-      Serial.print("BLESerial: Insecure Rx and Tx services initialized.\r\n");
-    }
+    LOGI("BLESerial: Insecure Rx and Tx services initialized.");
   }
 
   if (!rxChar || !txChar) {
-    if (logLevel >= ERROR) {
-      Serial.print("BLESerial: ERROR: Characteristic creation failed.\r\n");
-    }
+    LOGE("BLESerial: Characteristic creation failed.");
     return false;
   }
 
@@ -1185,9 +1099,7 @@ bool BLESerial::begin(Mode newMode, const char *deviceName, Security newSecure)
 
   // Start the service
   service->start();
-  if (logLevel >= INFO) {
-    Serial.print("BLESerial: Services started.\r\n");
-  }
+  LOGI("BLESerial: Services started.");
 
   // Primary Advertising: Flags and Service UUID
   advertising = NimBLEDevice::getAdvertising();
@@ -1222,9 +1134,7 @@ bool BLESerial::begin(Mode newMode, const char *deviceName, Security newSecure)
   expirePairingWindowIfNeeded();
   applyPairingPolicy(false);
   advertising->start();
-  if (logLevel >= INFO) {
-    Serial.print("BLESerial: Advertising started.\r\n");
-  }
+  LOGI("BLESerial: Advertising started.");
 
   // Initialize watermarks
   updateWaterMarks(static_cast<size_t>(txChunkSize));
@@ -1238,12 +1148,8 @@ bool BLESerial::begin(Mode newMode, const char *deviceName, Security newSecure)
   deviceMac = NimBLEDevice::getAddress().toString();
   for (char &c : deviceMac)
     c = (char)toupper((unsigned char)c);
-  if (logLevel >= INFO) {
-    Serial.printf("BLESerial: MAC=%s.\r\n", deviceMac.c_str());
-  }
-  if (logLevel >= INFO) {
-    Serial.print("BLESerial: Initialization completed.\r\n");
-  }
+  LOGI("BLESerial: MAC=%s.", deviceMac.c_str());
+  LOGI("BLESerial: Initialization completed.");
 
   return true;
 }
@@ -1345,10 +1251,7 @@ void BLESerial::end()
     BLESerial::active = nullptr;
   }
 
-  if (logLevel >= INFO) {
-    Serial.println(
-      "BLESerial ended: BLE deinitialized and resources released.");
-  }
+  LOGI("BLESerial: BLE deinitialized and resources released.");
 }
 
 void BLESerial::setPairingPolicy(PairingPolicy policy) {
@@ -1366,10 +1269,8 @@ bool BLESerial::openPairingWindow(uint32_t durationMs) {
   pairingWindowOpen    = true;
   pairingWindowUntilMs = millis() + durationMs;
 
-  if (logLevel >= INFO) {
-    Serial.printf("BLESerial: Pairing window opened for %lu ms.\r\n",
-                  (unsigned long)durationMs);
-  }
+  LOGI("BLESerial: Pairing window opened for %lu ms.",
+       (unsigned long)durationMs);
 
   applyPairingPolicy();
 
@@ -1388,8 +1289,8 @@ void BLESerial::closePairingWindow() {
   pairingWindowOpen = false;
   pairingWindowUntilMs = 0;
 
-  if (wasOpen && logLevel >= INFO) {
-    Serial.println("BLESerial: Pairing window closed.");
+  if (wasOpen) {
+    LOGI("BLESerial: Pairing window closed.");
   }
 
   applyPairingPolicy();
@@ -1416,9 +1317,7 @@ void BLESerial::refreshPasskey() {
   passkey = (uint32_t)random(0UL, 1000000UL);
   NimBLEDevice::setSecurityPasskey(passkey);
 
-  if (logLevel >= INFO) {
-    Serial.printf("BLESerial: Refreshed passkey for pairing: %06u.\r\n", passkey);
-  }
+  LOGI("BLESerial: Refreshed passkey for pairing: %06u.", passkey);
 }
 
 void BLESerial::expirePairingWindowIfNeeded() {
@@ -1428,9 +1327,7 @@ void BLESerial::expirePairingWindowIfNeeded() {
   pairingWindowOpen = false;
   pairingWindowUntilMs = 0;
 
-  if (logLevel >= INFO) {
-    Serial.println("BLESerial: Pairing window expired.");
-  }
+  LOGI("BLESerial: Pairing window expired.");
 
   applyPairingPolicy();
 }
@@ -1943,16 +1840,13 @@ void BLESerial::startTxTask() {
       1);
     if (rc != pdPASS) {
       txTaskHandle = nullptr;
-      if (logLevel >= WARNING)
-        Serial.println(
-          "BLESerial: TX task creation failed; "
-          "staying in polling mode.");
+      LOGW(
+        "BLESerial: TX task creation failed; "
+        "staying in polling mode.");
     } else {
       // Keep task in a mostly idle state until notified or connected
       vTaskSuspend(txTaskHandle); // begin asleep as requested
-      if (logLevel >= INFO)
-        Serial.println(
-          "BLESerial: TX task created (suspended).");
+      LOGI("BLESerial: TX task created (suspended).");
     }
   }
 #endif
@@ -1963,8 +1857,7 @@ void BLESerial::stopTxTask() {
   if (!txTaskHandle) return;
   vTaskDelete(txTaskHandle);
   txTaskHandle = nullptr;
-  if (logLevel >= INFO)
-    Serial.println("BLESerial: TX task stopped.");
+  LOGI("BLESerial: TX task stopped.");
 #endif
 }
 
@@ -2028,14 +1921,10 @@ void BLESerial::startRSSITask() {
         1);
     if (rc != pdPASS) {
       rssiTaskHandle = nullptr;
-      if (logLevel >= WARNING) {
-        Serial.printf("BLESerial: RSSITask creation failed rc=%d.\r\n", (int)rc);
-      }
+      LOGW("BLESerial: RSSITask creation failed rc=%d.", (int)rc);
     } else {
       vTaskSuspend(rssiTaskHandle);
-      if (logLevel >= INFO)
-        Serial.println(
-          "BLESerial: RSSI task created (suspended).");
+      LOGI("BLESerial: RSSI task created (suspended).");
     }
   }
 #endif
@@ -2046,8 +1935,7 @@ void BLESerial::stopRSSITask() {
   if (!rssiTaskHandle) return;
   vTaskDelete(rssiTaskHandle);
   rssiTaskHandle = nullptr;
-  if (logLevel >= INFO)
-    Serial.println("BLESerial: RSSI task stopped.");
+  LOGI("BLESerial: RSSI task stopped.");
 #endif
 }
 
@@ -2159,18 +2047,14 @@ void BLESerial::adjustLink() {
 
   if (rc == 0) {
     lastRSSIActionMs = millis();
-    if (logLevel >= INFO) {
+    if (logGetLevel() >= LOG_LEVEL_INFO) {
       const char *target = (desiredCodedScheme ? (desiredCodedScheme == 2 ? "CODED(S2)" : "CODED(S8)")
                                                : (desiredPhyMask == BLE_GAP_LE_PHY_2M_MASK ? "2M" : "1M"));
-      Serial.printf(
-        "BLESerial: RSSI adapt: avg=%d raw=%d -> %s.\r\n", 
-        rssiAvg, rssiRaw, target);
+      LOGI("BLESerial: RSSI adapt: avg=%d raw=%d -> %s.",
+           rssiAvg, rssiRaw, target);
     }
   } else {
-    if (logLevel >= WARNING) {
-      Serial.printf(
-        "BLESerial: PHY adapt failed (rc=%d).\r\n", rc);
-    }
+    LOGW("BLESerial: PHY adapt failed (rc=%d).", rc);
   }
 }
 
@@ -2233,9 +2117,7 @@ BLESerial::TxState  BLESerial::txStaging() {
 
   // If characteristic vanished unexpectedly
   if (!txChar) {
-    if (logLevel >= ERROR) {
-      Serial.println("BLESerial: TX characteristic went missing during staging.");
-    }
+    LOGE("BLESerial: TX characteristic went missing during staging.");
     return TxState::Waiting;
   }
 
@@ -2249,14 +2131,10 @@ BLESerial::TxState  BLESerial::txStaging() {
   //   setValueFailedCount++;
   //   if (setValueFailedCount >= MAX_SETVALUE_FAILS) {
   //     // Too many failures: assume char is broken
-  //     if (logLevel >= ERROR) {
-  //       Serial.println("BLESerial: TX characteristic setValue() failed repeatedly, discarding.");
-  //     }
+  //     LOGE("BLESerial: TX characteristic setValue() failed repeatedly, discarding.");
   //     return TxState::Discarding;
   //   } else {
-  //     if (logLevel >= ERROR) {
-  //       Serial.println("BLESerial: TX setValue() failed.");
-  //     }
+  //     LOGE("BLESerial: TX setValue() failed.");
   //   }
   //   return TxState::Staging;
   // }
@@ -2268,14 +2146,10 @@ BLESerial::TxState  BLESerial::txStaging() {
     // Notify failed
     notifyFailedCount++;
     if (notifyFailedCount > MAX_NOTIFY_FAILS) {
-      if (logLevel >= ERROR) {
-        Serial.println("BLESerial: TX notify() failed repeatedly. Discarding.");
-      }
+      LOGE("BLESerial: TX notify() failed repeatedly. Discarding.");
       return TxState::Discarding ;
     } else {
-      if (logLevel >= WARNING) {
-        Serial.println("BLESerial: TX notify() failed.");
-      }
+      LOGW("BLESerial: TX notify() failed.");
       return TxState::Recovering; // notify again later
     }
   }
@@ -2340,9 +2214,7 @@ BLESerial::TxState  BLESerial::txRecovering() {
   
   // If characteristic vanished unexpectedly
   if (txChar == nullptr) {
-    if (logLevel >= ERROR) {
-      Serial.println("BLESerial: TX characteristic missing during recovery.");
-    }
+    LOGE("BLESerial: TX characteristic missing during recovery.");
     return TxState::Waiting;
   }
 
@@ -2385,17 +2257,13 @@ BLESerial::TxState  BLESerial::txRecovering() {
     notifyFailedCount++;
     // If we have exceeded bounded retries, discard this staged chunk
     if (notifyFailedCount >= RECOVER_RETRY_MAX) {
-      if (logLevel >= WARNING) {
-        Serial.printf("BLESerial: TX notify() failed %u times in recovery; discarding.\r\n",
-                      (unsigned)notifyFailedCount);
-      }
+      LOGW("BLESerial: TX notify() failed %u times in recovery; discarding.",
+           (unsigned)notifyFailedCount);
       return TxState::Discarding;
     }
     // Otherwise keep recovering (will re-enter with bounded backoff)
-    if (logLevel >= WARNING) {
-      Serial.printf("BLESerial: TX notify() failed in recovery (retry %u/%u).\r\n",
-                    (unsigned)notifyFailedCount, (unsigned)RECOVER_RETRY_MAX);
-    }
+    LOGW("BLESerial: TX notify() failed in recovery (retry %u/%u).",
+         (unsigned)notifyFailedCount, (unsigned)RECOVER_RETRY_MAX);
     return TxState::Recovering;
   }
 
@@ -2437,20 +2305,16 @@ BLESerial::TxState  BLESerial::txDiscarding() {
 
     recentlyBackedOff  = true;          // reuse your existing cooldown gate
 
-    if (logLevel >= WARNING) {
-      Serial.printf(
-        "BLESerial: %s: discard burst -> backoff, new LKG=%uµs.\r\n",
-        hsCodeName(onStatusCode), (unsigned)lkgIntervalUs);
-    }
+    LOGW(
+      "BLESerial: %s: discard burst -> backoff, new LKG=%uµs.",
+      hsCodeName(onStatusCode), (unsigned)lkgIntervalUs);
   }
 
   // Update Tx lock
   if (txBuf.available() <= lowWater) txLocked = false;
 
-  if (logLevel >= ERROR) {
-    Serial.printf("BLESerial: %s: TX unsuccessful, discarding %u bytes.\r\n",
-      hsCodeName(onStatusCode), (unsigned)dropLen);   
-  }
+  LOGE("BLESerial: %s: TX unsuccessful, discarding %u bytes.",
+       hsCodeName(onStatusCode), (unsigned)dropLen);
   return TxState::Staging;
 } // end txDiscarding
 
@@ -2527,9 +2391,7 @@ void BLESerial::onTxSuccess(){
         lkgFails       = 0;
         successStreak  = 0;
         TX_CRITICAL_EXIT(this);
-        if (logLevel >= INFO) {
-          Serial.printf("BLESerial: Probe %u accepted. LKG=%u.\r\n", sendIntervalUs, lkgIntervalUs);
-        }
+        LOGI("BLESerial: Probe %u accepted. LKG=%u.", sendIntervalUs, lkgIntervalUs);
         return;
       }
       TX_CRITICAL_EXIT(this);
@@ -2582,9 +2444,7 @@ void BLESerial::onTxSuccess(){
   
   // If already at/below the floor, don’t probe
   if (sendIntervalUs <= lowerBound) {
-    // if (logLevel >= INFO) {
-    //   Serial.printf("BLESerial: Probe floor reached (%uµs), no further probe.\r\n", (unsigned)lowerBound);
-    // }
+    // LOGI("BLESerial: Probe floor reached (%uµs), no further probe.", (unsigned)lowerBound);
     return;
   }
 
@@ -2592,9 +2452,7 @@ void BLESerial::onTxSuccess(){
   uint32_t next = (sendIntervalUs > step) ? (sendIntervalUs - step) : sendIntervalUs;
   if (next < lowerBound) next = lowerBound;
   if (next == sendIntervalUs) {
-    // if (logLevel >= INFO) {
-    //   Serial.printf("BLESerial: Probe step collapsed (no change), floor=%uµs.\r\n", (unsigned)lowerBound);
-    // }
+    // LOGI("BLESerial: Probe step collapsed (no change), floor=%uµs.", (unsigned)lowerBound);
     return;
   }
 
@@ -2608,9 +2466,7 @@ void BLESerial::onTxSuccess(){
     TX_CRITICAL_EXIT(this);
   }
 
-  if (logLevel >= INFO) {
-    Serial.printf("BLESerial: Starting probe: %u -> %u.\r\n", lkgSnapUs, sendIntervalUs);
-  }
+  LOGI("BLESerial: Starting probe: %u -> %u.", lkgSnapUs, sendIntervalUs);
   return;
 } // --- end of success path -------------------------------------
 // ---------------------------------------------------------------
@@ -2686,20 +2542,20 @@ void BLESerial::onMessageTooBig(){
   }
 
   // Log 
-  if (logLevel >= INFO) {
+  if (logGetLevel() >= LOG_LEVEL_INFO) {
     if (!didExhaustRetries) {
       if (txChunkSize == prevChunk) {
-        Serial.printf(
-          "BLESerial: %s: but chunk already at MIN (%u) min_send_interval=%uµs (retry %d/%d).\r\n", 
+        LOGI(
+          "BLESerial: %s: but chunk already at MIN (%u) min_send_interval=%uµs (retry %d/%d).",
           hsCodeName(onStatusCode), txChunkSize, minSendIntervalUS, emsgSizeRetries, EMSGSIZE_RETRY_MAX);
       } else {
-        Serial.printf(
-          "BLESerial: %s: reducing chunk %u->%u min_send_interval=%uµs (retry %d/%d).\r\n",
+        LOGI(
+          "BLESerial: %s: reducing chunk %u->%u min_send_interval=%uµs (retry %d/%d).",
           hsCodeName(onStatusCode), prevChunk, txChunkSize, minSendIntervalUS, emsgSizeRetries, EMSGSIZE_RETRY_MAX);
       }
     } else {
-      Serial.printf(
-        "BLESerial: %s adjust chunk %u->%u min_send_interval=%uµs (retry %d/%d).\r\n",
+      LOGI(
+        "BLESerial: %s adjust chunk %u->%u min_send_interval=%uµs (retry %d/%d).",
         hsCodeName(onStatusCode),
         prevChunk, txChunkSize,
         minSendIntervalUS,
@@ -2709,12 +2565,9 @@ void BLESerial::onMessageTooBig(){
   }
 
   if (shouldDisconnect) {
-    if (logLevel >= WARNING) {
-      Serial.printf(
-        "BLESerial: %s: persistent EMSGSIZE at MIN_CHUNKSIZE -> disconnect.\r\n",
-        hsCodeName(onStatusCode)
-      );
-    }
+    LOGW(
+      "BLESerial: %s: persistent EMSGSIZE at MIN_CHUNKSIZE -> disconnect.",
+      hsCodeName(onStatusCode));
     if (server && connHandle != BLE_HS_CONN_HANDLE_NONE) {
       server->disconnect(connHandle);
     }
@@ -2805,47 +2658,41 @@ void BLESerial::onCongestion(){
   }
 
   if (logStoppedProbe) {
-    if (logLevel >= WARNING) {
-      Serial.printf("BLESerial: %s: failing probe, revert to LKG=%u µs.\r\n",
-                    hsCodeName(onStatusCode), (unsigned)logSendUs);
+    LOGW("BLESerial: %s: failing probe, revert to LKG=%u µs.",
+         hsCodeName(onStatusCode), (unsigned)logSendUs);
       // #ifdef ARDUINO_ARCH_ESP32
-      // Serial.printf("           Heap: free=%u int=%u largest=%u psram_free=%u psram_largest=%u.\r\n",
+      // LOGW("BLESerial: Heap: free=%u int=%u largest=%u psram_free=%u psram_largest=%u.",
       //               (unsigned)heapFree, (unsigned)heapFreeInternal,
       //               (unsigned)heapLargestBlock,
       //               (unsigned)psramFree, (unsigned)psramLargestBlock);
       // #endif
-    }
     return;
   }
 
   if (logEscalated) {
-    if (logLevel >= WARNING) {
-      Serial.printf("BLESerial: %s: %u/%u, fallback %u -> %u & escalate LKG %u -> %u µs txBuf=%u.\r\n",
-                    hsCodeName(onStatusCode),
-                    (unsigned)logLkgFails, (unsigned)LKG_ESCALATE_AFTER_FAILS,
-                    (unsigned)(prevIntvl), (unsigned)logSendUs,
-                    (unsigned)prevLkg, (unsigned)lkgIntervalUs,
-                    (unsigned)logUsed);
+    LOGW("BLESerial: %s: %u/%u, fallback %u -> %u & escalate LKG %u -> %u µs txBuf=%u.",
+         hsCodeName(onStatusCode),
+         (unsigned)logLkgFails, (unsigned)LKG_ESCALATE_AFTER_FAILS,
+         (unsigned)(prevIntvl), (unsigned)logSendUs,
+         (unsigned)prevLkg, (unsigned)lkgIntervalUs,
+         (unsigned)logUsed);
       // #ifdef ARDUINO_ARCH_ESP32
-      // Serial.printf("           Heap: free=%u int=%u largest=%u psram_free=%u psram_largest=%u.\r\n",
+      // LOGW("BLESerial: Heap: free=%u int=%u largest=%u psram_free=%u psram_largest=%u.",
       //               (unsigned)heapFree, (unsigned)heapFreeInternal,
       //               (unsigned)heapLargestBlock,
       //               (unsigned)psramFree, (unsigned)psramLargestBlock);
       // #endif                    
-    }
   } else {
-    if (logLevel >= WARNING) {
-      Serial.printf("BLESerial: %s: %u/%u, fallback %u -> %u µs.\r\n",
-                    hsCodeName(onStatusCode),
-                    (unsigned)lkgFails, (unsigned)LKG_ESCALATE_AFTER_FAILS,
-                    (unsigned)(prevIntvl), (unsigned)logSendUs);
+    LOGW("BLESerial: %s: %u/%u, fallback %u -> %u µs.",
+         hsCodeName(onStatusCode),
+         (unsigned)lkgFails, (unsigned)LKG_ESCALATE_AFTER_FAILS,
+         (unsigned)(prevIntvl), (unsigned)logSendUs);
       // #ifdef ARDUINO_ARCH_ESP32
-      // Serial.printf("           Heap: free=%u int=%u largest=%u psram_free=%u psram_largest=%u.\r\n",
+      // LOGW("BLESerial: Heap: free=%u int=%u largest=%u psram_free=%u psram_largest=%u.",
       //               (unsigned)heapFree, (unsigned)heapFreeInternal,
       //               (unsigned)heapLargestBlock,
       //               (unsigned)psramFree, (unsigned)psramLargestBlock);
       // #endif    
-    }
   }
 
 } // end of congestion handling
@@ -2929,57 +2776,48 @@ void BLESerial::onTimeout(){
   }
 
   if (logStoppedProbe) {
-    if (logLevel >= WARNING) {
-      Serial.printf("BLESerial: %s: failing probe, revert to LKG=%u.\r\n",
-                    hsCodeName(onStatusCode), logSendUs);
+    LOGW("BLESerial: %s: failing probe, revert to LKG=%u.",
+         hsCodeName(onStatusCode), logSendUs);
       // #ifdef ARDUINO_ARCH_ESP32
-      // Serial.printf("           Heap: free=%u int=%u largest=%u psram_free=%u psram_largest=%u.\r\n",
+      // LOGW("BLESerial: Heap: free=%u int=%u largest=%u psram_free=%u psram_largest=%u.",
       //               (unsigned)heapFree, (unsigned)heapFreeInternal,
       //               (unsigned)heapLargestBlock,
       //               (unsigned)psramFree, (unsigned)psramLargestBlock);
       // #endif                    
-    }
   } else if (logEscalated) {
-    if (logLevel >= WARNING) {
-      Serial.printf("BLESerial: %s: %u/%u, fallback %u -> %u & escalate LKG %u -> %u µs txBuf=%u.\r\n",
-                    hsCodeName(onStatusCode),
-                    (unsigned)logLkgFails, (unsigned)LKG_ESCALATE_AFTER_FAILS,
-                    (unsigned)(prevIntvl), (unsigned)logSendUs,
-                    (unsigned)prevLkg, (unsigned)lkgIntervalUs,
-                    (unsigned)logUsed);
+    LOGW("BLESerial: %s: %u/%u, fallback %u -> %u & escalate LKG %u -> %u µs txBuf=%u.",
+         hsCodeName(onStatusCode),
+         (unsigned)logLkgFails, (unsigned)LKG_ESCALATE_AFTER_FAILS,
+         (unsigned)(prevIntvl), (unsigned)logSendUs,
+         (unsigned)prevLkg, (unsigned)lkgIntervalUs,
+         (unsigned)logUsed);
       // #ifdef ARDUINO_ARCH_ESP32
-      // Serial.printf("           Heap: free=%u int=%u largest=%u psram_free=%u psram_largest=%u.\r\n",
+      // LOGW("BLESerial: Heap: free=%u int=%u largest=%u psram_free=%u psram_largest=%u.",
       //               (unsigned)heapFree, (unsigned)heapFreeInternal,
       //               (unsigned)heapLargestBlock,
       //               (unsigned)psramFree, (unsigned)psramLargestBlock);
       // #endif                    
-    }
   } else {
-    if (logLevel >= WARNING) {
-      Serial.printf("BLESerial: %s: %u/%u, fallback %u -> %u µs.\r\n",
-                    hsCodeName(onStatusCode),
-                    (unsigned)lkgFails, (unsigned)LKG_ESCALATE_AFTER_FAILS,
-                    (unsigned)(prevIntvl), (unsigned)logSendUs);      // #ifdef ARDUINO_ARCH_ESP32
-      // Serial.printf("           Heap: free=%u int=%u largest=%u psram_free=%u psram_largest=%u.\r\n",
+    LOGW("BLESerial: %s: %u/%u, fallback %u -> %u µs.",
+         hsCodeName(onStatusCode),
+         (unsigned)lkgFails, (unsigned)LKG_ESCALATE_AFTER_FAILS,
+         (unsigned)(prevIntvl), (unsigned)logSendUs);      // #ifdef ARDUINO_ARCH_ESP32
+      // LOGW("BLESerial: Heap: free=%u int=%u largest=%u psram_free=%u psram_largest=%u.",
       //               (unsigned)heapFree, (unsigned)heapFreeInternal,
       //               (unsigned)heapLargestBlock,
       //               (unsigned)psramFree, (unsigned)psramLargestBlock);
       // #endif                    
-    }
   }
 
   if (timeoutRetries >= ETIMEOUT_RETRY_MAX) {
     // too many retries: disconnect
-    if (logLevel >= ERROR)
-      Serial.printf("BLESerial: %s: persistent -> disconnect.\r\n", hsCodeName(onStatusCode));
+    LOGE("BLESerial: %s: persistent -> disconnect.", hsCodeName(onStatusCode));
     if (server && connHandle != BLE_HS_CONN_HANDLE_NONE)
       server->disconnect(connHandle);
     timeoutRetries = 0; // reset counter
   } else {
-    if (logLevel >= WARNING) {
-      Serial.printf("BLESerial: %s: retry %d/%d.\r\n", 
-        hsCodeName(onStatusCode), timeoutRetries, ETIMEOUT_RETRY_MAX);
-    }
+    LOGW("BLESerial: %s: retry %d/%d.",
+         hsCodeName(onStatusCode), timeoutRetries, ETIMEOUT_RETRY_MAX);
   }
 }
 // ---------------------------------------------------------------
@@ -3001,10 +2839,7 @@ void BLESerial::onDisconnected(){
   discardStreak     = 0;
   lkgIntervalUs     = sendIntervalUs;
   TX_CRITICAL_EXIT(this);
-  if (logLevel >= WARNING)
-    Serial.printf(
-      "BLESerial: %s: link closed.\r\n", 
-      hsCodeName(onStatusCode));
+  LOGW("BLESerial: %s: link closed.", hsCodeName(onStatusCode));
   return;
 } // end of disconnect/EOS
 // ---------------------------------------------------------------
@@ -3038,22 +2873,19 @@ void BLESerial::onSoftwareError(){
     TX_CRITICAL_EXIT(this); // ------------------
   }
 
-  if (logStoppedProbe && logLevel >= INFO) {
-    Serial.printf("BLESerial: %s failing probe, revert to LKG=%u.\r\n",
-                  hsCodeName(onStatusCode), logLkgUs);
+  if (logStoppedProbe) {
+    LOGI("BLESerial: %s failing probe, revert to LKG=%u.",
+         hsCodeName(onStatusCode), logLkgUs);
   }
 
   if (softwareRetries >= SOFTWARE_RETRY_MAX) {
-    if (logLevel >= ERROR)
-      Serial.printf("BLESerial: %s: persistent -> disconnect.\r\n", hsCodeName(onStatusCode));
+    LOGE("BLESerial: %s: persistent -> disconnect.", hsCodeName(onStatusCode));
     if (server && connHandle != BLE_HS_CONN_HANDLE_NONE)
       server->disconnect(connHandle);
     softwareRetries = 0; // reset counter
   }
 
-  if (logLevel >= ERROR) {
-    Serial.printf("BLESerial: Software Error %s:.\r\n", hsCodeName(onStatusCode));
-  }
+  LOGE("BLESerial: Software Error %s:.", hsCodeName(onStatusCode));
 } // -- end of local bug/bad state handling
 // ---------------------------------------------------------------
 
@@ -3087,17 +2919,11 @@ void BLESerial::onUnclassified(){
   }
 
   if (logStoppedProbe) {
-    if (logLevel >= WARNING) {
-      Serial.printf(
-        "BLESerial: %s: unclassified issue while probing: revert to LKG=%u.\r\n",
-        hsCodeName(onStatusCode), logLkgUs);
-    }
+    LOGW(
+      "BLESerial: %s: unclassified issue while probing: revert to LKG=%u.",
+      hsCodeName(onStatusCode), logLkgUs);
   } else {
-    if (logLevel >= WARNING) {
-      Serial.printf(
-        "BLESerial: %s: unclassified issue.\r\n",
-        hsCodeName(onStatusCode));
-    }
+    LOGW("BLESerial: %s: unclassified issue.", hsCodeName(onStatusCode));
   }
 } // end of unclassified
 // ---------------------------------------------------------------  
@@ -3461,9 +3287,5 @@ bool BLESerial::requestMTU(uint16_t newMtu) {
 
 void BLESerial::setPower(int8_t dBm, NimBLETxPowerType scope) {
   NimBLEDevice::setPower(dBm, scope);
-  if (logLevel >= INFO) {
-    Serial.printf(
-      "BLESerial: TX Power set to %d dBm (scope %d).\r\n", 
-      dBm, (int)scope);
-  }
+  LOGI("BLESerial: TX Power set to %d dBm (scope %d).", dBm, (int)scope);
 }

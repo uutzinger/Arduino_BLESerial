@@ -67,12 +67,12 @@ void setup() {
   }
 
   // Increase verbosity on serial logging
-  // DEBUG   shows all events; 
-  // INFO    shows key events, warnings and errors, 
-  // WARNING shows problems and errors
-  // ERROR   shows errors only
-  // NONE    turns off logging
-  ble.setLogLevel(INFO);
+  // LOG_LEVEL_DEBUG shows all compiled debug events; define DEBUG before including BLESerial.h to compile them.
+  // LOG_LEVEL_INFO shows key events, warnings and errors.
+  // LOG_LEVEL_WARN shows problems and errors.
+  // LOG_LEVEL_ERROR shows errors only.
+  // LOG_LEVEL_NONE turns off logging.
+  ble.setLogLevel(LOG_LEVEL_INFO);
 
   // Optionally configure parameters
   // ble.setPower(BLE_TX_DBP9, PWR_ALL); // set transmit power, check src/BLESerial.h for options
@@ -93,6 +93,7 @@ void loop() {
   // =======================================================
   if (lr.poll(ble, line, sizeof(line))) { 
 
+    // Lambda function to send reply to both Serial and BLE
     auto reply = [&](const String& msg){
       Serial.println(msg);
       ble.println(msg);

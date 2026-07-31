@@ -55,7 +55,7 @@ Notes:
 
 ### Diagnostics / Logging
 
-* setLogLevel(level) / getLogLevel() – Control verbosity (NONE, ERROR, WARNING, INFO, DEBUG).
+* setLogLevel(level) / getLogLevel() – Control logger verbosity (`LOG_LEVEL_NONE`, `LOG_LEVEL_ERROR`, `LOG_LEVEL_WARN`, `LOG_LEVEL_INFO`, `LOG_LEVEL_DEBUG`). Debug output is compiled only when `DEBUG` is defined before including the logger.
 * printStats([stream]) – Emit current link, buffer, and error counters.
 
 ### Status / Introspection
@@ -91,7 +91,7 @@ Notes:
 
 ### Implemented Setters
 
-* setLogLevel(level) – Verbosity level of logging (occurs on serial port)
+* setLogLevel(level) – Verbosity level of logger output (defaults to Serial unless redirected with `logSetOutput()`)
 * requestMTU(mtu) – Modify  MTU, will result in renegotiation with client
 * getPumpMode() – Current pump mode
 * setPumpMode(Polling|Task) – Polling, or ESP32 task mode which runs a background FreeRTOS TX pump

@@ -17,12 +17,19 @@
 
 #include <Arduino.h>
 #include "RingBuffer.h"
+#include <logger.h>
 
 #include <NimBLEDevice.h>
 extern "C" {
-  #include "host/ble_gap.h"      // ble_gap_* (conn params, PHY, DLE)
-  #include "host/ble_hs_adv.h"   // BLE_HS_ADV_F_* flags for adv data
-  #include "host/ble_hs.h"       // BLE_HS_EDONE for notivy backoff
+  #ifdef USING_NIMBLE_ARDUINO_HEADERS
+    #include "nimble/nimble/host/include/host/ble_gap.h"      // ble_gap_* (conn params, PHY, DLE)
+    #include "nimble/nimble/host/include/host/ble_hs_adv.h"   // BLE_HS_ADV_F_* flags for adv data
+    #include "nimble/nimble/host/include/host/ble_hs.h"       // BLE_HS_EDONE for notivy backoff
+  #else
+    #include "host/ble_gap.h"      // ble_gap_* (conn params, PHY, DLE)
+    #include "host/ble_hs_adv.h"   // BLE_HS_ADV_F_* flags for adv data
+    #include "host/ble_hs.h"       // BLE_HS_EDONE for notivy backoff
+  #endif
 }
 
 // for mac address
@@ -57,22 +64,8 @@ extern "C" {
 /* Constants   */
 /******************************************************************************************************/
 
-#define BLE_SERIAL_VERSION_STRING "BLE Serial Library v1.2.0"
+#define BLE_SERIAL_VERSION_STRING "BLE Serial Library v1.2.1"
 #define BLE_SERIAL_APPEARANCE 0x0540 // Generic Sensor
-
-// Log levels: ascending by verbosity for comparisons like (logLevel >= LEVEL)
-// This ensures:
-//  - NONE (0) disables all logs
-//  - DEBUG (4) enables all logs
-//  - INFO prints INFO/WARNING/ERROR; 
-//  - WARNING prints WARNING/ERROR; 
-//  - ERROR prints only errors
-
-#define NONE     0
-#define ERROR    1
-#define WARNING  2
-#define INFO     3
-#define DEBUG    4
 
 // Max GATT MTU supported (ESP32 max 517); 
 // ATT payload per notify is MTU-3
@@ -364,8 +357,8 @@ public:
   // ----------------------------------------------------------------------------------------------
   // Logging / diagnostics
   // ----------------------------------------------------------------------------------------------
-  void     setLogLevel(uint8_t lvl) { logLevel = lvl; }
-  uint8_t  getLogLevel() const { return logLevel; }
+  void     setLogLevel(uint8_t lvl) { logSetLevel(lvl); }
+  uint8_t  getLogLevel() const { return static_cast<uint8_t>(logGetLevel()); }
   void     printStats(Stream &out);
   void     printStats() { printStats(Serial); }
   void     clearStats();
@@ -552,8 +545,6 @@ private:
   TxState           txState           = TxState::Waiting;
   Security          secure            = Security::None;
   PairingPolicy     pairingPolicy     = PairingPolicy::AlwaysOpen;
-  uint8_t           logLevel          = INFO;
-
   // Security
   uint32_t          passkey           = 0; // stores the currently displayed/generated 6-digit passkey
   bool              pairingWindowOpen = false;
