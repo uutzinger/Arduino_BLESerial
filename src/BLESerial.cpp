@@ -443,22 +443,32 @@ public:
     const uint8_t *data = reinterpret_cast<const uint8_t *>(v.data());
     const size_t len = v.size();
 
-    // RingBuffer is internally synchronized on ESP32; no external critical section needed here.
-    size_t pushed = s.rxBuf.push(data, len, true); // overwrite oldest if full
+    size_t pushed = 0;
+    size_t lost = 0;
+    RX_CRITICAL_ENTER(&s);
+    // RingBuffer returns retained input bytes in overwrite mode, not bytes evicted from the ring.
+    const size_t capacity = s.rxBuf.capacity();
+    const size_t used = s.rxBuf.available();
+    const size_t retained = std::min(len, capacity);
+    const size_t free = capacity - used;
+    const size_t overwritten = (retained > free) ? retained - free : 0;
+    lost = (len - retained) + overwritten;
+    pushed = s.rxBuf.push(data, len, true); // overwrite oldest if full
+    RX_CRITICAL_EXIT(&s);
 
-    // RX accounting (optional but handy)
-    s.bytesRx += pushed;
-    if (pushed < len) {
-      size_t lost = len - pushed;
+    // RX accounting includes all received bytes and all bytes the ring could not retain.
+    s.bytesRx += len;
+    if (lost) {
       s.rxDrops += lost;
       if (s.onRxOverflow) s.onRxOverflow(lost); // optional user provided callback
     }
     s.lastRxUs = micros();
 
+    // data points into the characteristic value and is valid only until that value is cleared.
+    if (s.onDataReceived && pushed) s.onDataReceived(data, len); // optional user provided callback
+
     // Clear last value held by the characteristic to free heap.
     ch->setValue(nullptr, 0);
-
-    if (s.onDataReceived && pushed) s.onDataReceived(data, pushed); // optional user provided callback
   }
 
 private:
@@ -595,7 +605,7 @@ public:
     bool indicate      = (subValue & 0x0002);
     s.clientSubscribed = notify || indicate;
 
-    if (logGetLevel() >= LOG_LEVEL_INFO) {
+    if (logGetLevel() <= LOG_LEVEL_INFO) {
       std::string uuid = ch->getUUID().toString();
       if (subValue == 0)
         LOGI("BLESerial: Client %s unsubscribed %s.",
@@ -789,7 +799,7 @@ int BLESerial::gapEventHandler(struct ble_gap_event *ev, void * /*arg*/) {
       // sendIntervalUs
       // probing/backoff state reset
 
-      if (logGetLevel() >= LOG_LEVEL_INFO) {
+      if (logGetLevel() <= LOG_LEVEL_INFO) {
         // Compute diagnostic sizing to confirm single-LL-PDU chunks
         const uint16_t attPayloadMax = (s.mtu > BLE_SERIAL_ATT_HDR_BYTES)
                                          ? (uint16_t)std::min<uint32_t>(BLE_SERIAL_MAX_GATT, (uint32_t)s.mtu - BLE_SERIAL_ATT_HDR_BYTES)
@@ -900,7 +910,9 @@ bool BLESerial::begin(Mode newMode, const char *deviceName, Security newSecure)
   // Minimal init; full feature set can be added incrementally
   mode = newMode;
   secure = newSecure;
-  logSetLevel(LOG_LEVEL_INFO);
+  if (!logLevelConfigured) {
+    logSetLevel(LOG_LEVEL_INFO);
+  }
 
   BLESerial::active = this; // allow static GAP handler to reach our instance
 
@@ -1372,14 +1384,20 @@ int BLESerial::available() {
 }
 
 int BLESerial::readAvailable() {
-  return (int)rxBuf.available();
+  RX_CRITICAL_ENTER(this);
+  const int available = (int)rxBuf.available();
+  RX_CRITICAL_EXIT(this);
+  return available;
 }
 
 // Read one byte
 int BLESerial::read() {
   // Assumes RingBuffer::pop() returns int (or -1 when empty)
   uint8_t b = 0;
-  if (rxBuf.pop(b) == 1)
+  RX_CRITICAL_ENTER(this);
+  const bool read = rxBuf.pop(b) == 1;
+  RX_CRITICAL_EXIT(this);
+  if (read)
     return (int)b;
   return -1;
 }
@@ -1387,20 +1405,29 @@ int BLESerial::read() {
 // Read up to n bytes into dst using RingBuffer::pop(T*, n)
 int BLESerial::read(uint8_t *dst, size_t n) {
   if (!dst || n == 0) return 0;
-  return (int)rxBuf.pop(dst, n);
+  RX_CRITICAL_ENTER(this);
+  const int read = (int)rxBuf.pop(dst, n);
+  RX_CRITICAL_EXIT(this);
+  return read;
 }
 
 // Implement Stream::peek() using RingBuffer::peek(T&)
 int BLESerial::peek() {
   uint8_t b = 0;
-  if (rxBuf.peek(b) == 1) return (int)b;
+  RX_CRITICAL_ENTER(this);
+  const bool hasByte = rxBuf.peek(b) == 1;
+  RX_CRITICAL_EXIT(this);
+  if (hasByte) return (int)b;
   return -1;
 }
 
 // Peak up to n bytes into dst using RingBuffer::peek(T*, n)
 int BLESerial::peek(uint8_t *dst, size_t n) {
   if (!dst || n == 0) return 0;
-  return (int)rxBuf.peek(dst, n);
+  RX_CRITICAL_ENTER(this);
+  const int peeked = (int)rxBuf.peek(dst, n);
+  RX_CRITICAL_EXIT(this);
+  return peeked;
 }
 
 void BLESerial::flush() {
@@ -1410,9 +1437,23 @@ void BLESerial::flush() {
   }
 
   const uint32_t deadline = millis() + FLUSH_MAX_WAIT_MS;
-  while (txBuf.available() > 0) {
+
+  #ifdef ARDUINO_ARCH_ESP32
+    if (pumpMode == PumpMode::Task) {
+      // The TX task exclusively owns the state machine in task mode.
+      wakeTxTask();
+      while (isSubscribed()) {
+        if (txBuf.available() == 0 && pendingLen == 0) break;
+        if ((int32_t)(millis() - deadline) >= 0) break;
+        delay(1);
+      }
+      return;
+    }
+  #endif
+
+  while (txBuf.available() > 0 || pendingLen > 0) {
     pumpTx();
-    if (txBuf.available() == 0) break;
+    if (txBuf.available() == 0 && pendingLen == 0) break;
     if (!isSubscribed()) break; // link went away mid-flush
     if ((int32_t)(millis() - deadline) >= 0) break; // bounded wait
     delay(1);
@@ -2047,7 +2088,7 @@ void BLESerial::adjustLink() {
 
   if (rc == 0) {
     lastRSSIActionMs = millis();
-    if (logGetLevel() >= LOG_LEVEL_INFO) {
+    if (logGetLevel() <= LOG_LEVEL_INFO) {
       const char *target = (desiredCodedScheme ? (desiredCodedScheme == 2 ? "CODED(S2)" : "CODED(S8)")
                                                : (desiredPhyMask == BLE_GAP_LE_PHY_2M_MASK ? "2M" : "1M"));
       LOGI("BLESerial: RSSI adapt: avg=%d raw=%d -> %s.",
@@ -2542,7 +2583,7 @@ void BLESerial::onMessageTooBig(){
   }
 
   // Log 
-  if (logGetLevel() >= LOG_LEVEL_INFO) {
+  if (logGetLevel() <= LOG_LEVEL_INFO) {
     if (!didExhaustRetries) {
       if (txChunkSize == prevChunk) {
         LOGI(

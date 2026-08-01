@@ -25,7 +25,7 @@ Supported pairing policies are AlwaysOpen, Windowed and BondedOnly.
 ### Pumping / Scheduling
 
 * update() – Call periodically when in Polling pump mode (non-ESP32 or when PumpMode::Polling selected) to advance TX/RSSI logic.
-* flush() – Drain TX ring by pumping until empty (non-blocking relative to BLE airtime; may return early if pacing prevents immediate sends).
+* flush() – Drain queued and in-flight TX within its bounded wait. In task mode it wakes the TX worker; in polling mode it pumps locally.
 * setPumpMode(Polling | Task) – Select manual loop pumping or ESP32 FreeRTOS background task.
 * getPumpMode() – Current mode.
 
@@ -78,7 +78,7 @@ Notes:
 * getTxUsed() / getRxUsed() – Bytes currently queued in TX / RX rings.
 * getTxCapacity() / getRxCapacity() – Total ring capacities.
 * getTxFree() / getRxFree() – Remaining free space in TX / RX rings.
-* getTxDrops() / getRxDrops() – Dropped bytes due to buffer saturation.
+* getTxDrops() / getRxDrops() – Dropped bytes due to buffer saturation; RX drops include evicted queued bytes and received bytes beyond ring capacity.
 * getLowWaterMark() / getHighWaterMark() – Current low/high water marks used for TX flow control.
 * getPairingPolicy() – Current onboarding policy for new peers.
 * isPairingWindowOpen() – True while new peer pairing is temporarily permitted.
@@ -124,8 +124,8 @@ Notes:
 * setOnClientDisconnect(cb(addr, reason)) –  your custom hook
 * setOnMtuChanged(cb(mtu)) –  your custom hook
 * setOnSubscribeChanged(cb(subscribed)) –  your custom hook
-* setOnDataReceived(cb(data, len)) –  your custom hook
-* setOnRxOverflow(cb(lost)) – called when RX ring overwrites oldest data
+* setOnDataReceived(cb(data, len)) – your custom hook; `data` is valid only during the callback, so copy it if it must be retained
+* setOnRxOverflow(cb(lost)) – called with the number of received or queued bytes the RX ring could not retain
 
 ### Notes
 

@@ -46,17 +46,21 @@ extern "C" {
 #endif
 
 // Define critical section helpers BEFORE class so they are visible where used.
-// They reference 'this->mux_' which is a per-instance spinlock.
+// They reference per-instance TX and RX spinlocks.
 #ifdef ARDUINO_ARCH_ESP32
   /* Per-instance critical helpers. These macros expect a pointer to an
-    instance (e.g. TX_CRITICAL_ENTER(this) or TX_CRITICAL_ENTER(&s)).
+    instance (e.g. TX_CRITICAL_ENTER(this) or RX_CRITICAL_ENTER(&s)).
     This form works both in non-static member functions and in static
     task functions where you have a local reference `s`. */
   #define TX_CRITICAL_ENTER(inst)  portENTER_CRITICAL(&(inst)->txMux)
   #define TX_CRITICAL_EXIT(inst)   portEXIT_CRITICAL(&(inst)->txMux)
+  #define RX_CRITICAL_ENTER(inst)  portENTER_CRITICAL(&(inst)->rxMux)
+  #define RX_CRITICAL_EXIT(inst)   portEXIT_CRITICAL(&(inst)->rxMux)
 #else
   #define TX_CRITICAL_ENTER(inst)
   #define TX_CRITICAL_EXIT(inst)
+  #define RX_CRITICAL_ENTER(inst)
+  #define RX_CRITICAL_EXIT(inst)
 #endif
 
 /******************************************************************************************************/
@@ -281,7 +285,7 @@ public:
   int      available() override;                        
            // RX bytes ready (Stream contract)
   void     flush() override;                            
-           // drain TX ring to link
+           // drain TX ring and in-flight frame to link, bounded by FLUSH_MAX_WAIT_MS
   int      readAvailable();                             
            // Alias to available()
   int      read() override;                             
@@ -357,7 +361,7 @@ public:
   // ----------------------------------------------------------------------------------------------
   // Logging / diagnostics
   // ----------------------------------------------------------------------------------------------
-  void     setLogLevel(uint8_t lvl) { logSetLevel(lvl); }
+  void     setLogLevel(uint8_t lvl) { logLevelConfigured = true; logSetLevel(lvl); }
   uint8_t  getLogLevel() const { return static_cast<uint8_t>(logGetLevel()); }
   void     printStats(Stream &out);
   void     printStats() { printStats(Serial); }
@@ -372,6 +376,7 @@ public:
   void     setOnClientDisconnect(std::function<void(const std::string& addr, uint16_t reason)> cb) { onClientDisconnect = std::move(cb); }
   void     setOnMtuChanged(std::function<void(uint16_t mtu)> cb) { onMtuChanged = std::move(cb); }
   void     setOnSubscribeChanged(std::function<void(bool subscribed)> cb) { onSubscribeChanged = std::move(cb); }
+  // data is borrowed from NimBLE and remains valid only for the duration of the callback.
   void     setOnDataReceived(std::function<void(const uint8_t* data, size_t len)> cb) { onDataReceived = std::move(cb); }
   void     setOnRxOverflow(std::function<void(size_t lost)> cb) { onRxOverflow = std::move(cb); }
 
@@ -536,6 +541,8 @@ private:
   // On Status Code
   volatile int      onStatusCode      = 0;
 
+  bool              logLevelConfigured = false;
+
   int8_t            powerAdv          = BLE_TX_DB0;
   int8_t            powerScan         = BLE_TX_DB0;
   int8_t            powerConn         = BLE_TX_DB0;
@@ -587,10 +594,11 @@ private:
   void              applyPairingPolicy(bool restartAdvertising = true);
   void              syncWhiteListFromBonds();
 
-    // Background TX task helpers (ESP32)
+    // Background task helpers and per-instance state locks (ESP32)
   #ifdef ARDUINO_ARCH_ESP32
-  // Instance spinlock for TX state
+  // TX state and RX accounting locks
   portMUX_TYPE      txMux = portMUX_INITIALIZER_UNLOCKED;
+  portMUX_TYPE      rxMux = portMUX_INITIALIZER_UNLOCKED;
   static TaskHandle_t rssiTaskHandle;
   static TaskHandle_t txTaskHandle;
   #endif
@@ -626,7 +634,7 @@ private:
   std::function<void(uint16_t mtu)> onMtuChanged;
   std::function<void(bool subscribed)> onSubscribeChanged;
   std::function<void(const uint8_t* data, size_t len)> onDataReceived; // raw RX callback
-  std::function<void(size_t lost)> onRxOverflow; // invoked when RX ring overwrites oldest data
+  std::function<void(size_t lost)> onRxOverflow; // invoked when the RX ring cannot retain received data
 
 };
 
