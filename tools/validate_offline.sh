@@ -34,5 +34,6 @@ compile_example minimal examples/BLESerial_minimal
 compile_example demo examples/BLESerial_demo
 compile_example comprehensive examples/BLESerial_comprehensive
 compile_example latency examples/BLESerial_latency
+compile_example text-stress examples/BLESerial_text_stress
 compile_example comprehensive-debug examples/BLESerial_comprehensive \
   --build-property build.extra_flags=-DDEBUG

@@ -19,7 +19,11 @@ The library provides a server implementation as it is designed to work with prog
 - [SerialUI](https://github.com/uutzinger/SerialUI) 
 - [nRF connect for mobile](https://www.nordicsemi.com/Products/Development-tools/nRF-Connect-for-mobile)
 
-There are similar implementations from other authors ([senseshift](https://github.com/senseshift/arduino-ble-serial), [afpineda](https://github.com/afpineda/NuS-NimBLE-Serial)).
+There are similar implementations from other authors: [senseshift](https://github.com/senseshift/arduino-ble-serial)
+(lightweight and customizable) and [afpineda](https://github.com/afpineda/NuS-NimBLE-Serial)
+(feature-rich NUS protocols and commands).
+
+This implementation is a managed high-throughput BLE serial transport with adaptive link behavior and explicit reliability/streaming modes.
 
 A throughput of more than **100k bytes/s** and a latency of **10..20 ms** was achieved.
 
@@ -88,13 +92,14 @@ void loop() {
 ## Documentation
 - [API Documentation](./API.md)
 - [Operation Modes](./Operation_Modes.md)
-- [To Do](./TODO.md)
+- [Task List](./TaskList.md)
 - [Change Log](./CHANGELOG.md)
 
 ## Example Programs
 - BLESerial_minimal (simple echo program)
 - BLESerial_demo (simple program listed above)
 - BLESerial_comprehensive (generates data for performance measurements)
+- BLESerial_text_stress (validates reliable large text output over USB and BLE)
 
 ## Contributing
 

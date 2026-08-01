@@ -100,6 +100,14 @@ public:
     s.recentlyBackedOff = false;
     s.coolDowns       = 0;
     s.probeSuccesses  = 0;
+    s.rssiRaw         = 0;
+    s.rssiAvg         = 0;
+    s.lastRSSIMs      = 0;
+    s.lastRSSIActionMs = millis();
+    s.resetRSSIDecision();
+    s.lastCongestionAtUs = 0;
+    s.lastCongestionLogUs = 0;
+    s.resetCongestionWindow();
 
     uint16_t minItvl, maxItvl, latency, supTimeout;
     switch (s.mode) {
@@ -153,9 +161,6 @@ public:
       s.codedScheme = 0;
     }
 
-    s.desiredllTxOctets = LL_MAX_OCTETS;
-    s.desiredllTxTimeUs = s.estimate_LL_PDUTimeUs(s.desiredllTxOctets, s.phyIs2M, s.phyIsCoded, s.codedScheme); // best guess, likely too short
-
     (void)ble_gap_set_data_len(s.connHandle, s.desiredllTxOctets, s.desiredllTxTimeUs);
 
     s.llTxOctets = s.desiredllTxOctets; // for now
@@ -171,7 +176,7 @@ public:
                                 s.connLatency,
                                 PDUS_PER_WINDOW);
 
-    s.updateTxTiming();
+    s.updateTxTiming(true);
     // computes txChunkSize
     // minSendIntervalUS
     // low & high Water
@@ -211,9 +216,10 @@ public:
          s.phyToStr());
     LOGI("BLESerial: chunk=%u send_interval=%uµs min_send_interval=%uµs.",
          (unsigned)s.txChunkSize, (unsigned)s.sendIntervalUs, (unsigned)s.minSendIntervalUS);
-    LOGI("BLESerial: llTx: octets=%u time=%uµs | llRx: octets=%u time=%uµs.",
+    LOGI("BLESerial: DLE: tx_octets=%u max_tx_time=%uµs | rx_octets=%u max_rx_time=%uµs | est_tx_airtime=%uµs.",
          (unsigned)s.llTxOctets, (unsigned)s.llTxTimeUs,
-         (unsigned)s.llRxOctets, (unsigned)s.llRxTimeUs);
+         (unsigned)s.llRxOctets, (unsigned)s.llRxTimeUs,
+         (unsigned)s.estimate_LL_PDUTimeUs());
     if (s.onClientConnect) s.onClientConnect(s.peerAddr); // user provided addon callback
   }
 
@@ -232,6 +238,22 @@ public:
     s.phyIs2M           = false;
     s.phyIsCoded        = false;
     s.codedScheme       = 0;
+    switch (s.mode) {
+      case Mode::Fast:
+        s.desiredPhyMask = BLE_GAP_LE_PHY_2M_MASK;
+        s.desiredCodedScheme = 0;
+        break;
+      case Mode::LongRange:
+        s.desiredPhyMask = BLE_GAP_LE_PHY_CODED_MASK;
+        s.desiredCodedScheme = 2;
+        break;
+      case Mode::LowPower:
+      case Mode::Balanced:
+      default:
+        s.desiredPhyMask = BLE_GAP_LE_PHY_1M_MASK;
+        s.desiredCodedScheme = 0;
+        break;
+    }
     s.llTxTimeUs        = LL_DEFAULT_TIME_US;
     s.llTxOctets        = LL_MAX_OCTETS; // propose max octets next time (controller may downscale)
     s.llRxTimeUs        = LL_DEFAULT_TIME_US;
@@ -252,6 +274,14 @@ public:
     s.connIntervalUs    = 0;
     s.perEventShareUs   = 0;
     s.mtu               = BLE_SERIAL_MIN_MTU;
+    s.rssiRaw           = 0;
+    s.rssiAvg           = 0;
+    s.lastRSSIMs        = 0;
+    s.lastRSSIActionMs  = 0;
+    s.resetRSSIDecision();
+    s.lastCongestionAtUs = 0;
+    s.lastCongestionLogUs = 0;
+    s.resetCongestionWindow();
 
     // Reset MTU/chunk/EBADDATA counters; drop any staged frame
     TX_CRITICAL_ENTER(&s);
@@ -260,7 +290,7 @@ public:
     s.lastTxUs          = 0;
     TX_CRITICAL_EXIT(&s);
 
-    s.updateTxTiming();
+    s.updateTxTiming(true);
     // computes txChunkSize
     // minSendIntervalUS
     // low & high Water
@@ -299,9 +329,10 @@ public:
     auto &s = *owner;
 
     // Update negotiated MTU
+    const uint16_t previousMtu = s.mtu;
     s.mtu = m;
 
-    s.updateTxTiming(); // also clamps sendIntervalUs and resets ramp to floor
+    s.updateTxTiming(m != previousMtu);
     // computes txChunkSize
     // minSendIntervalUS
     // low & high Water
@@ -383,6 +414,7 @@ public:
     if (!owner)return;
     auto &s = *owner;
 
+    const uint32_t previousShareUs = s.perEventShareUs;
     s.connItvlUnits        = connInfo.getConnInterval();
     s.connLatency          = connInfo.getConnLatency();
     s.supervisionTimeoutMS = static_cast<uint16_t>(connInfo.getConnTimeout() * 10u);
@@ -392,7 +424,7 @@ public:
                               s.connLatency,
                               PDUS_PER_WINDOW);
                     
-    s.updateTxTiming();
+    s.updateTxTiming(previousShareUs != 0 && s.perEventShareUs < previousShareUs);
 
     LOGI("BLESerial: Conn params updated: interval=%.2f ms, latency=%u, perEventShare=%lu µs",
          s.connItvlUnits * 1.25f, s.connLatency, (unsigned long)s.perEventShareUs);
@@ -701,17 +733,18 @@ int BLESerial::gapEventHandler(struct ble_gap_event *ev, void * /*arg*/) {
       const auto &p = ev->phy_updated;
 
       if (p.status != 0) {
-        // error
-        s.phyIs2M     = false;
-        s.phyIsCoded  = false;
-        s.codedScheme = 0;
-        s.updateTxTiming();
-        // computes txChunkSize
-        // minSendIntervalUS
-        // low & high Water
-        // lkgIntervalUs
-        // sendIntervalUs
-        // probing/backoff state reset      
+        // The current PHY did not change. Keep its timing and allow a later
+        // RSSI sample to retry after the adaptation cooldown.
+        if (s.phyIsCoded) {
+          s.desiredPhyMask = BLE_GAP_LE_PHY_CODED_MASK;
+          s.desiredCodedScheme = s.codedScheme;
+        } else {
+          s.desiredPhyMask = s.phyIs2M ? BLE_GAP_LE_PHY_2M_MASK
+                                       : BLE_GAP_LE_PHY_1M_MASK;
+          s.desiredCodedScheme = 0;
+        }
+        s.resetRSSIDecision();
+        LOGW("BLESerial: PHY update failed (status=%u).", (unsigned)p.status);
         return 0;
       }
 
@@ -722,20 +755,24 @@ int BLESerial::gapEventHandler(struct ble_gap_event *ev, void * /*arg*/) {
       s.phyIs2M = (p.tx_phy == BLE_HCI_LE_PHY_2M) && (p.rx_phy == BLE_HCI_LE_PHY_2M);
       s.phyIsCoded = (p.tx_phy == BLE_HCI_LE_PHY_CODED) && (p.rx_phy == BLE_HCI_LE_PHY_CODED);
       s.codedScheme = s.phyIsCoded ? (s.desiredCodedScheme == 2 ? 2 : 8) : 0;
+      s.resetRSSIDecision();
 
       // Early return if PHY/coding unchanged (suppress redundant recompute/log)
       if (prev2M == s.phyIs2M && prevCoded == s.phyIsCoded && prevScheme == s.codedScheme) {
         LOGD("BLESerial: PHY unchanged (GAP):");
         LOGD(
-          "BLESerial: tx=%u, rx=%u, (%s), llTxTime=%uµs, tx_chunk_size=%u, min_send_interval=%uµs.",
+          "BLESerial: tx=%u, rx=%u, (%s), dle_max_tx_time=%uµs, est_pdu_airtime=%uµs, tx_chunk_size=%u, min_send_interval=%uµs.",
           p.tx_phy, p.rx_phy, s.phyToStr(),
           (unsigned)s.llTxTimeUs,
+          (unsigned)s.estimate_LL_PDUTimeUs(),
           (unsigned)s.txChunkSize,
           (unsigned)s.minSendIntervalUS);
         return 0;
       }
 
-      s.updateTxTiming();
+      const bool phyImproved = (!prev2M && s.phyIs2M) ||
+          (prevCoded && s.phyIsCoded && prevScheme == 8 && s.codedScheme == 2);
+      s.updateTxTiming(phyImproved);
       // computes txChunkSize
       // minSendIntervalUS
       // low & high Water
@@ -745,9 +782,10 @@ int BLESerial::gapEventHandler(struct ble_gap_event *ev, void * /*arg*/) {
 
       LOGI("BLESerial: PHY updated (GAP):");
       LOGI(
-        "BLESerial: tx=%u, rx=%u, (%s), llTxTime=%uµs, tx_chunk_size=%u, min_send_interval=%uµs.",
+        "BLESerial: tx=%u, rx=%u, (%s), dle_max_tx_time=%uµs, est_pdu_airtime=%uµs, tx_chunk_size=%u, min_send_interval=%uµs.",
         p.tx_phy, p.rx_phy, s.phyToStr(),
         (unsigned)s.llTxTimeUs,
+        (unsigned)s.estimate_LL_PDUTimeUs(),
         (unsigned)s.txChunkSize,
         (unsigned)s.minSendIntervalUS);
 
@@ -780,8 +818,8 @@ int BLESerial::gapEventHandler(struct ble_gap_event *ev, void * /*arg*/) {
     {
       const auto &p = ev->data_len_chg; // negotiated per-link values
 
-      // Update LL payload/time; prefer tx metrics for our TX pacing
-      // If you also store RX metrics, you can mirror them here.
+      // Retain negotiated DLE capability values for sizing and diagnostics.
+      // Actual pacing airtime is computed separately from PHY and octet count.
       const uint16_t oldTxOctets = s.llTxOctets;
       const uint16_t oldTxTimeUs = s.llTxTimeUs;
       s.llTxOctets = p.max_tx_octets;
@@ -820,9 +858,10 @@ int BLESerial::gapEventHandler(struct ble_gap_event *ev, void * /*arg*/) {
         const bool fitsSingle = (M > 0) && (sduBytes <= M);
 
         LOGI("BLESerial: DLE updated:");
-        LOGI("BLESerial: tx %u->%u octets, %u->%uµs; mtu=%u",
+        LOGI("BLESerial: tx %u->%u octets, max_tx_time %u->%uµs, est_pdu_airtime=%uµs; mtu=%u",
              (unsigned)oldTxOctets, (unsigned)s.llTxOctets,
              (unsigned)oldTxTimeUs, (unsigned)s.llTxTimeUs,
+             (unsigned)s.estimate_LL_PDUTimeUs(),
              (unsigned)s.mtu);
         LOGI("BLESerial: max_att_payload=%u, max_one_PDU_payload=%u",
              (unsigned)attPayloadMax, (unsigned)onePduMaxPayload);
@@ -844,9 +883,10 @@ int BLESerial::gapEventHandler(struct ble_gap_event *ev, void * /*arg*/) {
     case BLE_GAP_EVENT_MTU:
     {
       const uint16_t mtu = ev->mtu.value; // ATT MTU negotiated
+      const uint16_t previousMtu = s.mtu;
       s.mtu = mtu;                        // keep class MTU in sync
 
-      s.updateTxTiming();
+      s.updateTxTiming(mtu > previousMtu);
       // computes txChunkSize
       // minSendIntervalUS
       // low & high Water
@@ -922,6 +962,10 @@ bool BLESerial::begin(Mode newMode, const char *deviceName, Security newSecure)
   // Minimal init; full feature set can be added incrementally
   mode = newMode;
   secure = newSecure;
+  resetRSSIDecision();
+  lastCongestionAtUs = 0;
+  lastCongestionLogUs = 0;
+  resetCongestionWindow();
   BLESerial::active = this; // allow static GAP handler to reach our instance
 
   // Decide desired link behavior from mode (desired != current)
@@ -935,27 +979,31 @@ bool BLESerial::begin(Mode newMode, const char *deviceName, Security newSecure)
     desiredPhyMask      = BLE_GAP_LE_PHY_2M_MASK;
     desiredCodedScheme  = 0;
     desiredllTxOctets   = LL_MAX_OCTETS;
-    desiredllTxTimeUs   = estimate_LL_PDUTimeUs(desiredllTxOctets, true, false, desiredCodedScheme);
+    // Allow a later RSSI fallback from 2M to 1M without constraining DLE.
+    desiredllTxTimeUs   = LL_DEFAULT_TIME_US;
     dBmAdv              = BLE_TX_DBP9;
     dBmScan             = BLE_TX_DBP9;
     dBmConn             = BLE_TX_DBP9;
     break;
   case Mode::LowPower:
-    modePreferredMtu    = BLE_SERIAL_MIN_MTU;
+    // A large negotiated MTU does not pad short messages, but it lets queued
+    // bursts use fewer notifications and connection events per byte.
+    modePreferredMtu    = BLE_SERIAL_MAX_MTU;
     desiredPhyMask      = BLE_GAP_LE_PHY_1M_MASK;
     desiredCodedScheme  = 0;
     desiredllTxOctets   = LL_MAX_OCTETS;
-    desiredllTxTimeUs   = estimate_LL_PDUTimeUs(desiredllTxOctets, false, false, desiredCodedScheme);
+    desiredllTxTimeUs   = LL_DEFAULT_TIME_US;
     dBmAdv              = BLE_TX_DBN9;
     dBmScan             = BLE_TX_DBN9;
     dBmConn             = BLE_TX_DBN6;
     break;
   case Mode::LongRange:
-    modePreferredMtu    = BLE_SERIAL_DEFAULT_MTU;
+    modePreferredMtu    = BLE_SERIAL_MIN_MTU;
     desiredPhyMask      = BLE_GAP_LE_PHY_CODED_MASK;
     desiredCodedScheme  = 2;
     desiredllTxOctets   = LL_MAX_OCTETS;
-    desiredllTxTimeUs   = estimate_LL_PDUTimeUs(desiredllTxOctets, false, true, desiredCodedScheme);
+    // Reserve enough controller TX time for an RSSI-driven S2 -> S8 change.
+    desiredllTxTimeUs   = LL_CODED_MAX_TIME_US;
     dBmAdv              = BLE_TX_DBP9;
     dBmScan             = BLE_TX_DBP9;
     dBmConn             = BLE_TX_DBP9;
@@ -966,7 +1014,7 @@ bool BLESerial::begin(Mode newMode, const char *deviceName, Security newSecure)
     desiredPhyMask      = BLE_GAP_LE_PHY_1M_MASK;
     desiredCodedScheme  = 0;
     desiredllTxOctets   = LL_MAX_OCTETS;
-    desiredllTxTimeUs   = estimate_LL_PDUTimeUs(desiredllTxOctets, false, false, desiredCodedScheme);
+    desiredllTxTimeUs   = LL_DEFAULT_TIME_US;
     dBmAdv              = BLE_TX_DBN6;
     dBmScan             = BLE_TX_DBN3;
     dBmConn             = BLE_TX_DB0;
@@ -1272,7 +1320,10 @@ void BLESerial::end()
   rssiAvg            = 0;
   lastRSSIMs         = 0;
   lastRSSIActionMs   = 0;
+  resetRSSIDecision();
   lastCongestionAtUs = 0;
+  lastCongestionLogUs = 0;
+  resetCongestionWindow();
 
   // Reset pacing/timing
   TX_CRITICAL_ENTER(this); // ----------------
@@ -1540,8 +1591,16 @@ bool BLESerial::writeReady() const {
 
 // Write single byte
 size_t BLESerial::write(uint8_t b) {
-  // Write single byte
+  return writeTimeout(&b, 1, writeTimeoutMs);
+}
 
+// Write n bytes
+size_t BLESerial::write(const uint8_t *p, size_t n) {
+  return writeTimeout(p, n, writeTimeoutMs);
+}
+
+// Non-blocking write single byte
+size_t BLESerial::writeNonBlocking(uint8_t b) {
   if (!isSubscribed()) return 0; // no client subscribed, nothing will drain
 
   // Respect high-water lock; only unlock once below lowWater
@@ -1569,8 +1628,8 @@ size_t BLESerial::write(uint8_t b) {
   return pushed;
 }
 
-// Write n bytes
-size_t BLESerial::write(const uint8_t *p, size_t n) {
+// Non-blocking write n bytes
+size_t BLESerial::writeNonBlocking(const uint8_t *p, size_t n) {
   if (!p || n == 0) return 0;
 
   if (!isSubscribed()) return 0; // no client subscribed, nothing will drain
@@ -1601,9 +1660,10 @@ size_t BLESerial::writeTimeout(const uint8_t *p, size_t n, uint32_t timeoutMs) {
   // ensure all bytes are queued or timeout expires
   if (!p || n == 0) return 0;
   const uint32_t endAt = millis() + timeoutMs;
+  const bool wasSubscribed = isSubscribed();
   size_t pushed = 0;
 
-  while (pushed < n) {
+  while (pushed < n && isSubscribed()) {
     // Respect staged/in-flight frames: wait until they clear
     if (txLocked) {
       if (txBuf.available() <= lowWater) {
@@ -1647,7 +1707,38 @@ size_t BLESerial::writeTimeout(const uint8_t *p, size_t n, uint32_t timeoutMs) {
     // After wait (no push), buffer likely shrank: check low-water unlock
     if (txBuf.available() <= lowWater) txLocked = false;
   }
+
+  if (wasSubscribed && pushed < n) {
+    TX_CRITICAL_ENTER(this);
+    txDrops += (n - pushed);
+    timeoutCount = timeoutCount + 1u;
+    TX_CRITICAL_EXIT(this);
+  }
   return pushed;
+}
+
+size_t BLESerial::println(const char *str) {
+  if (!str) return 0;
+
+  const size_t payloadLen = strlen(str);
+  size_t written = write(reinterpret_cast<const uint8_t*>(str), payloadLen);
+  if (written != payloadLen) {
+    return written;
+  }
+
+  written += write(reinterpret_cast<const uint8_t*>("\r\n"), 2);
+  return written;
+}
+
+size_t BLESerial::println(const String &s) {
+  const size_t payloadLen = s.length();
+  size_t written = write(reinterpret_cast<const uint8_t*>(s.c_str()), payloadLen);
+  if (written != payloadLen) {
+    return written;
+  }
+
+  written += write(reinterpret_cast<const uint8_t*>("\r\n"), 2);
+  return written;
 }
 
 // Print formatted string
@@ -1660,12 +1751,28 @@ size_t BLESerial::printf(const char *fmt, ...) {
   int n = vsnprintf(buf, sizeof(buf), fmt, ap);
   va_end(ap);
 
-  if (n <= 0) return n;
+  if (n <= 0) return 0;
 
   // If output was truncated, n is the number that would have been written,
   // but we only send sizeof(buf) - 1 bytes.
   size_t toSend = (n < (int)sizeof(buf)) ? (size_t)n : (sizeof(buf) - 1);
   size_t pushed = write(reinterpret_cast<const uint8_t*>(buf), toSend);
+  return pushed;
+}
+
+size_t BLESerial::printfNonBlocking(const char *fmt, ...) {
+  if (!fmt) return 0;
+
+  char buf[128];
+  va_list ap;
+  va_start(ap, fmt);
+  int n = vsnprintf(buf, sizeof(buf), fmt, ap);
+  va_end(ap);
+
+  if (n <= 0) return 0;
+
+  size_t toSend = (n < (int)sizeof(buf)) ? (size_t)n : (sizeof(buf) - 1);
+  size_t pushed = writeNonBlocking(reinterpret_cast<const uint8_t*>(buf), toSend);
   return pushed;
 }
 
@@ -1729,11 +1836,13 @@ void BLESerial::printStats(Stream &out) {
   // LL negotiated parameters
   out.print(F("  LL: tx_octets="));
   out.print(llTxOctets);
-  out.print(F(" tx_time="));
+  out.print(F(" max_tx_time="));
   out.print(llTxTimeUs);
+  out.print(F("us est_tx_airtime="));
+  out.print(estimate_LL_PDUTimeUs());
   out.print(F("us rx_octets="));
   out.print(llRxOctets);
-  out.print(F(" rx_time="));
+  out.print(F(" max_rx_time="));
   out.print(llRxTimeUs);
   out.print(F(" con_intvl_ms="));
   out.print(connItvlUnits ? (connItvlUnits * 1.25f) : 0.0f);
@@ -1958,7 +2067,7 @@ void BLESerial::startTxTask() {
     BaseType_t rc = xTaskCreatePinnedToCore(
       BLESerial::pumpTxTask,
       "BLETxPump",
-      2304,
+      TX_TASK_STACK_BYTES,
       this,
       1,
       &txTaskHandle,
@@ -2040,7 +2149,7 @@ void BLESerial::startRSSITask() {
     BaseType_t rc = xTaskCreatePinnedToCore(
         BLESerial::RSSITask,
         "RSSITask",
-        3072,
+        RSSI_TASK_STACK_BYTES,
         this,
         2,
         &rssiTaskHandle,
@@ -2084,12 +2193,20 @@ void BLESerial::suspendRSSITask() {
 #endif
 }
 
-void BLESerial::adjustLink() {
-  /*
-  Adjust the link layer parameters (PHY, coded scheme) based on RSSI.
+void BLESerial::resetRSSIDecision() {
+  rssiCandidatePhyMask = 0;
+  rssiCandidateCodedScheme = 0;
+  rssiCandidateCount = 0;
+}
 
-  This might not work as it would require disconnect and reconnect to change PHY
-  */
+void BLESerial::resetCongestionWindow() {
+  congestionWindowStartUs = 0;
+  congestionEvents = 0;
+  congestionHighWaterEvents = 0;
+}
+
+void BLESerial::adjustLink() {
+  // Adjust the active PHY or coded scheme based on filtered RSSI.
 
   if (!isConnected()) return;
 
@@ -2105,21 +2222,51 @@ void BLESerial::adjustLink() {
   else
     rssiAvg = (int8_t)((4 * (int)rssiAvg + (int)rssiRaw) / 5);
 
-  // Cooldown before any further link adaptation
-  if ((millis() - lastRSSIActionMs) < RSSI_ACTION_COOLDOWN_MS)
+  // Do not accumulate a pending decision during the post-change holdoff.
+  if ((millis() - lastRSSIActionMs) < RSSI_ACTION_COOLDOWN_MS) {
+    resetRSSIDecision();
     return;
+  }
 
-  // Decide target PHY / coded scheme
+  // Decide the target within the selected mode's policy. Hysteresis depends on
+  // the current PHY so a noisy sample near a threshold cannot toggle the link.
   uint8_t newDesiredCodedScheme = 0;
   uint8_t newDesiredPhyMask = BLE_GAP_LE_PHY_1M_MASK;
 
-  if        (rssiAvg <= (RSSI_S8_THRESHOLD + RSSI_HYSTERESIS)) {
-    newDesiredCodedScheme = 8;
-  } else if (rssiAvg <= (RSSI_S2_THRESHOLD + RSSI_HYSTERESIS)) {
-    newDesiredCodedScheme = 2;
-  } else if (rssiAvg > (RSSI_FAST_THRESHOLD - RSSI_HYSTERESIS)) {
-    newDesiredPhyMask = BLE_GAP_LE_PHY_2M_MASK;
-  } // else stay 1M
+  switch (mode) {
+    case Mode::Fast:
+      // Fast adapts only between 2M and 1M. Coded PHY would trade away the
+      // throughput and latency guarantees that define this mode.
+      if (phyIs2M) {
+        newDesiredPhyMask =
+          (rssiAvg < (RSSI_FAST_THRESHOLD - RSSI_HYSTERESIS))
+            ? BLE_GAP_LE_PHY_1M_MASK : BLE_GAP_LE_PHY_2M_MASK;
+      } else {
+        newDesiredPhyMask =
+          (rssiAvg > (RSSI_FAST_THRESHOLD + RSSI_HYSTERESIS))
+            ? BLE_GAP_LE_PHY_2M_MASK : BLE_GAP_LE_PHY_1M_MASK;
+      }
+      break;
+
+    case Mode::LongRange:
+      // LongRange stays coded and changes only the coding scheme.
+      if (phyIsCoded && codedScheme == 8) {
+        newDesiredCodedScheme =
+          (rssiAvg > (RSSI_S8_THRESHOLD + RSSI_HYSTERESIS)) ? 2 : 8;
+      } else {
+        newDesiredCodedScheme =
+          (rssiAvg < (RSSI_S8_THRESHOLD - RSSI_HYSTERESIS)) ? 8 : 2;
+      }
+      break;
+
+    case Mode::LowPower:
+    case Mode::Balanced:
+    default:
+      // These modes use their connection interval, latency, MTU, and power
+      // settings as the primary policy and remain on the broadly compatible 1M PHY.
+      newDesiredPhyMask = BLE_GAP_LE_PHY_1M_MASK;
+      break;
+  }
 
   // Evaluate change necessity
   bool change = false;
@@ -2140,10 +2287,34 @@ void BLESerial::adjustLink() {
     }
   }
 
-  if (!change) return;
+  if (!change) {
+    resetRSSIDecision();
+    return;
+  }
+
+  const uint8_t candidatePhyMask =
+      (newDesiredCodedScheme > 0) ? BLE_GAP_LE_PHY_CODED_MASK : newDesiredPhyMask;
+  const bool isUpgrade =
+      (mode == Mode::Fast && candidatePhyMask == BLE_GAP_LE_PHY_2M_MASK) ||
+      (mode == Mode::LongRange && newDesiredCodedScheme == 2);
+  const uint8_t requiredSamples = isUpgrade ? RSSI_UPGRADE_CONFIRM_SAMPLES
+                                             : RSSI_DOWNGRADE_CONFIRM_SAMPLES;
+
+  if (rssiCandidatePhyMask != candidatePhyMask ||
+      rssiCandidateCodedScheme != newDesiredCodedScheme) {
+    rssiCandidatePhyMask = candidatePhyMask;
+    rssiCandidateCodedScheme = newDesiredCodedScheme;
+    rssiCandidateCount = 1;
+  } else if (rssiCandidateCount < requiredSamples) {
+    rssiCandidateCount = rssiCandidateCount + 1u;
+  }
+
+  if (rssiCandidateCount < requiredSamples) return;
 
   // Apply PHY preference
   int rc = 0;
+  const uint8_t previousDesiredPhyMask = desiredPhyMask;
+  const uint8_t previousDesiredCodedScheme = desiredCodedScheme;
   desiredPhyMask = (newDesiredCodedScheme > 0) ? BLE_GAP_LE_PHY_CODED_MASK : newDesiredPhyMask;
   desiredCodedScheme = newDesiredCodedScheme;
   if (desiredCodedScheme > 0) {
@@ -2173,6 +2344,7 @@ void BLESerial::adjustLink() {
 
   if (rc == 0) {
     lastRSSIActionMs = millis();
+    resetRSSIDecision();
     if (logGetLevel() <= LOG_LEVEL_INFO) {
       const char *target = (desiredCodedScheme ? (desiredCodedScheme == 2 ? "CODED(S2)" : "CODED(S8)")
                                                : (desiredPhyMask == BLE_GAP_LE_PHY_2M_MASK ? "2M" : "1M"));
@@ -2180,6 +2352,9 @@ void BLESerial::adjustLink() {
            rssiAvg, rssiRaw, target);
     }
   } else {
+    desiredPhyMask = previousDesiredPhyMask;
+    desiredCodedScheme = previousDesiredCodedScheme;
+    resetRSSIDecision();
     LOGW("BLESerial: PHY adapt failed (rc=%d).", rc);
   }
 }
@@ -2497,7 +2672,11 @@ void BLESerial::onTxSuccess(){
         coolDowns         = 0;
         successStreak     = 0;
         discardStreak     = 0;
-        // lkgFails          = 0; 
+        lkgFails          = 0;
+        congestionWindowStartUs = 0;
+        congestionEvents = 0;
+        congestionHighWaterEvents = 0;
+        lastCongestionLogUs = 0;
       }
       TX_CRITICAL_EXIT(this); // ----------------
       return;
@@ -2704,74 +2883,105 @@ void BLESerial::onMessageTooBig(){
 // temporary resource exhaustion
 // -> retry same payload later with backoff.
 void BLESerial::onCongestion(){
-  lastCongestionAtUs = (uint32_t)micros();
   const uint32_t nowUs = (uint32_t)micros();
   bool logStoppedProbe = false;
   bool logEscalated    = false;
+  bool logTransient    = false;
   uint32_t logSendUs   = 0;
   size_t   logUsed     = 0;
   uint32_t prevLkg     = 0;
   uint32_t prevIntvl   = 0;
   uint32_t logLkgFails = 0;
-
-
-  // #ifdef ARDUINO_ARCH_ESP32
-  // // Capture heap metrics early; they’re cheap and help diagnosing ENOMEM vs general heap pressure
-  // size_t heapFree           = heap_caps_get_free_size(MALLOC_CAP_DEFAULT);
-  // size_t heapFreeInternal   = heap_caps_get_free_size(MALLOC_CAP_INTERNAL);
-  // size_t heapLargestBlock   = heap_caps_get_largest_free_block(MALLOC_CAP_DEFAULT);
-  // size_t psramFree          = heap_caps_get_free_size(MALLOC_CAP_SPIRAM);
-  // size_t psramLargestBlock  = heap_caps_get_largest_free_block(MALLOC_CAP_SPIRAM);
-  // #endif
+  bool logHighPressure = false;
 
   {
     TX_CRITICAL_ENTER(this); // ------------------
 
     successStreak     = 0;
     coolDowns         = 0;
-
-    // Use a small bump like your probe step
-    const uint32_t bumpAbs = PROBE_STEP_US;
-    const uint32_t bumpPct = (lkgIntervalUs * PROBE_STEP_PCT) / 100u;
-    const uint32_t bump    = (bumpPct > bumpAbs) ? bumpPct : bumpAbs;
-
-    // Fall back
-
     prevLkg           = lkgIntervalUs;
+    prevIntvl         = sendIntervalUs;
     recentlyBackedOff = true;
-    lkgFails = lkgFails + 1u;
+
+    const size_t used = txBuf.available();
+    const bool highPressure = highWater > 0 && used >= highWater;
+    const bool newWindow = congestionWindowStartUs == 0 ||
+        (lastCongestionAtUs != 0 &&
+         (nowUs - lastCongestionAtUs) > CONGESTION_WINDOW_RESET_US);
+
+    if (newWindow) {
+      congestionWindowStartUs = nowUs;
+      congestionEvents = 1;
+      congestionHighWaterEvents = highPressure ? 1 : 0;
+    } else {
+      if (congestionEvents < UINT8_MAX) {
+        congestionEvents = congestionEvents + 1u;
+      }
+      if (highPressure) {
+        if (congestionHighWaterEvents < UINT8_MAX) {
+          congestionHighWaterEvents = congestionHighWaterEvents + 1u;
+        }
+      } else {
+        congestionHighWaterEvents = 0;
+      }
+    }
+    lastCongestionAtUs = nowUs;
+
+    const bool persistentByTime =
+        congestionEvents >= LKG_ESCALATE_AFTER_FAILS &&
+        (nowUs - congestionWindowStartUs) >= CONGESTION_PERSISTENCE_US;
+    const bool persistentByPressure =
+        congestionHighWaterEvents >= CONGESTION_HIGH_WATER_EVENTS &&
+        (nowUs - congestionWindowStartUs) >= CONGESTION_HIGH_WATER_MIN_US;
+    const uint32_t hardFloorUs = perEventShareUs ? perEventShareUs
+                                                  : minSendIntervalUS;
+    const uint32_t confirmedLkgUs = lkgIntervalUs ? lkgIntervalUs
+                                                   : hardFloorUs;
 
     if (probing) {
-      // Probing, falling back to LKG
-      prevIntvl       = sendIntervalUs;
       probing         = false;
       probeSuccesses  = 0;
-      // lkgFails        = 0;
-      sendIntervalUs  = lkgIntervalUs;
+      sendIntervalUs  = confirmedLkgUs;
       lastTxUs        = nowUs;  // respect slower pacing immediately
       logStoppedProbe = true;
-      logSendUs       = sendIntervalUs; // equals lkgIntervalUs after fallback
-    } else if (lkgFails >= LKG_ESCALATE_AFTER_FAILS) {
-      // Not probing
-      // falling back to LKG was not enough: escalate LKG after repeated failures
-      prevIntvl       = sendIntervalUs;
-      // Escalate LKG exactly once
-      lkgIntervalUs   = (lkgIntervalUs * LKG_ESCALATE_NUM) / LKG_ESCALATE_DEN;
-      // Set send interval slightly above the new LKG to give the stack room
-      sendIntervalUs  = lkgIntervalUs + bump * (uint32_t)(lkgFails);
-      logLkgFails     = lkgFails;
-      lkgFails        = 1;
+      logSendUs       = sendIntervalUs;
+    } else if (persistentByTime || persistentByPressure) {
+      uint32_t nextLkg = static_cast<uint32_t>(
+          (static_cast<uint64_t>(confirmedLkgUs) * LKG_ESCALATE_NUM +
+           LKG_ESCALATE_DEN - 1u) / LKG_ESCALATE_DEN);
+      if (nextLkg <= confirmedLkgUs && confirmedLkgUs < UINT32_MAX) {
+        nextLkg = confirmedLkgUs + 1u;
+      }
+      const uint32_t maxLkg = static_cast<uint32_t>(
+          std::min<uint64_t>(UINT32_MAX,
+              static_cast<uint64_t>(minSendIntervalUS) *
+              CONGESTION_MAX_FLOOR_MULTIPLIER));
+      if (nextLkg > maxLkg) nextLkg = maxLkg;
+      if (nextLkg < hardFloorUs) nextLkg = hardFloorUs;
+
+      lkgIntervalUs   = nextLkg;
+      sendIntervalUs  = lkgIntervalUs;
+      logLkgFails     = congestionEvents;
+      logHighPressure = persistentByPressure;
+      congestionWindowStartUs = nowUs;
+      congestionEvents = 0;
+      congestionHighWaterEvents = 0;
       lastTxUs        = nowUs; // respect slower pacing immediately
       logEscalated    = true;
       logSendUs       = sendIntervalUs;
-      logUsed         = txBuf.available();
+      logUsed         = used;
     } else {
-      // Not yet at escalation threshold: lift above current LKG to avoid re-hitting the same pace
-      prevIntvl = sendIntervalUs;
-      sendIntervalUs = lkgIntervalUs + bump * (uint32_t)(lkgFails);
+      // An isolated resource miss is not evidence that the learned pace is bad.
+      sendIntervalUs = confirmedLkgUs;
       lastTxUs = nowUs;
       logSendUs = sendIntervalUs;
-      logUsed   = txBuf.available();
+      logUsed   = used;
+      if (lastCongestionLogUs == 0 ||
+          (nowUs - lastCongestionLogUs) >= CONGESTION_LOG_INTERVAL_US) {
+        lastCongestionLogUs = nowUs;
+        logTransient = true;
+        logLkgFails = congestionEvents;
+      }
     }
     TX_CRITICAL_EXIT(this); // ------------------
   }
@@ -2779,39 +2989,21 @@ void BLESerial::onCongestion(){
   if (logStoppedProbe) {
     LOGW("BLESerial: %s: failing probe, revert to LKG=%u µs.",
          hsCodeName(onStatusCode), (unsigned)logSendUs);
-      // #ifdef ARDUINO_ARCH_ESP32
-      // LOGW("BLESerial: Heap: free=%u int=%u largest=%u psram_free=%u psram_largest=%u.",
-      //               (unsigned)heapFree, (unsigned)heapFreeInternal,
-      //               (unsigned)heapLargestBlock,
-      //               (unsigned)psramFree, (unsigned)psramLargestBlock);
-      // #endif
     return;
   }
 
   if (logEscalated) {
-    LOGW("BLESerial: %s: %u/%u, fallback %u -> %u & escalate LKG %u -> %u µs txBuf=%u.",
+    LOGW("BLESerial: %s: persistent%s (%u events), pace %u -> %u, LKG %u -> %u µs txBuf=%u.",
          hsCodeName(onStatusCode),
-         (unsigned)logLkgFails, (unsigned)LKG_ESCALATE_AFTER_FAILS,
+         logHighPressure ? "/high-water" : "",
+         (unsigned)logLkgFails,
          (unsigned)(prevIntvl), (unsigned)logSendUs,
          (unsigned)prevLkg, (unsigned)lkgIntervalUs,
          (unsigned)logUsed);
-      // #ifdef ARDUINO_ARCH_ESP32
-      // LOGW("BLESerial: Heap: free=%u int=%u largest=%u psram_free=%u psram_largest=%u.",
-      //               (unsigned)heapFree, (unsigned)heapFreeInternal,
-      //               (unsigned)heapLargestBlock,
-      //               (unsigned)psramFree, (unsigned)psramLargestBlock);
-      // #endif                    
-  } else {
-    LOGW("BLESerial: %s: %u/%u, fallback %u -> %u µs.",
+  } else if (logTransient) {
+    LOGW("BLESerial: %s: transient (%u events), hold LKG=%u µs txBuf=%u.",
          hsCodeName(onStatusCode),
-         (unsigned)lkgFails, (unsigned)LKG_ESCALATE_AFTER_FAILS,
-         (unsigned)(prevIntvl), (unsigned)logSendUs);
-      // #ifdef ARDUINO_ARCH_ESP32
-      // LOGW("BLESerial: Heap: free=%u int=%u largest=%u psram_free=%u psram_largest=%u.",
-      //               (unsigned)heapFree, (unsigned)heapFreeInternal,
-      //               (unsigned)heapLargestBlock,
-      //               (unsigned)psramFree, (unsigned)psramLargestBlock);
-      // #endif    
+         (unsigned)logLkgFails, (unsigned)logSendUs, (unsigned)logUsed);
   }
 
 } // end of congestion handling
@@ -3158,7 +3350,7 @@ void BLESerial::updateWaterMarks(size_t chunkSize)
 
 }
 
-void BLESerial::updateTxTiming() {
+void BLESerial::updateTxTiming(bool resetPacing) {
   // computes txChunkSize
   // minSendIntervalUS
   // low & high Water
@@ -3166,26 +3358,48 @@ void BLESerial::updateTxTiming() {
   // sendIntervalUs
   // probing/backoff state reset
 
+  const uint32_t previousFloor = minSendIntervalUS;
+  const uint16_t previousChunk = txChunkSize;
   txChunkSize       = computeTxChunkSize(mtu, llTxOctets, mode, secure, txBuf.capacity());
   minSendIntervalUS = computeSendIntervalUs(txChunkSize);
   updateWaterMarks(static_cast<size_t>(txChunkSize));
 
-  // Clamp the active interval to the current floor if requested or out of bounds
-  if (sendIntervalUs == 0 || sendIntervalUs < minSendIntervalUS)
-    sendIntervalUs = minSendIntervalUS;
-
-  // After any renegotiation, make LKG match the active interval (the new floor)
-  lkgIntervalUs = sendIntervalUs;
-
-  // Reset probing/backoff state to the new floor
   TX_CRITICAL_ENTER(this); // ----------------
-  probing           = false;
-  probeSuccesses    = 0;
-  lkgFails          = 0;
-  recentlyBackedOff = false;
-  coolDowns         = 0;
-  successStreak     = 0;
-  discardStreak     = 0;
+  const bool linkTimingChanged = resetPacing ||
+      previousFloor != minSendIntervalUS || previousChunk != txChunkSize;
+  const bool restartAtFloor = resetPacing || previousFloor == 0 ||
+      sendIntervalUs == 0 || lkgIntervalUs == 0 ||
+      minSendIntervalUS < previousFloor;
+  if (restartAtFloor) {
+    // A new link or a genuinely faster link starts at its new computed floor.
+    // This is what lets throughput recover after PHY/connection improvement.
+    sendIntervalUs = minSendIntervalUS;
+    lkgIntervalUs  = minSendIntervalUS;
+  } else {
+    // For an unchanged or slower link, retain learned congestion backoff while
+    // ensuring neither active nor last-known-good pacing violates the new floor.
+    if (sendIntervalUs < minSendIntervalUS) sendIntervalUs = minSendIntervalUS;
+    if (lkgIntervalUs  < minSendIntervalUS) lkgIntervalUs  = minSendIntervalUS;
+  }
+
+  if (linkTimingChanged) {
+    // A real link change invalidates probes and congestion evidence. Only a
+    // confirmed improvement or a new link clears learned backoff.
+    probing           = false;
+    probeSuccesses    = 0;
+    lkgFails          = 0;
+    congestionWindowStartUs = 0;
+    congestionEvents = 0;
+    congestionHighWaterEvents = 0;
+    lastCongestionAtUs = 0;
+    if (restartAtFloor) {
+      recentlyBackedOff = false;
+      coolDowns         = 0;
+      lastCongestionLogUs = 0;
+    }
+    successStreak     = 0;
+    discardStreak     = 0;
+  }
   TX_CRITICAL_EXIT(this); // ----------------
 }
 
@@ -3209,7 +3423,7 @@ uint32_t BLESerial::computePerEventShareUs(uint32_t connInt,
 
 uint32_t BLESerial::computeSendIntervalUs(uint16_t chunkSize) {
   // Compute time to transmit one chunk of given size over the link
-  // Uses the negotiated llTxOctets and llTxTimeUs (globals)
+  // Uses negotiated LL octets and the active PHY
   // Compare with connection interval and slave latency
   // Return the larger of the two with a guard margin
 
@@ -3232,11 +3446,10 @@ uint32_t BLESerial::computeSendIntervalUs(uint16_t chunkSize) {
   // How many full PDUs and leftover SDU bytes
   const uint32_t fullPduCount = sduBytes / M;
   const uint32_t lastPduSize  = sduBytes - fullPduCount * M;
-  // Use negotiated llTxTimeUs as authoritative per-full-PDU time when available (>0),
-  // otherwise compute per-PDU time from PHY and octets.
-  uint32_t perFullPduUs = (llTxTimeUs > 0) 
-      ? llTxTimeUs 
-      : estimate_LL_PDUTimeUs(llTxOctets, phyIs2M, phyIsCoded, codedScheme);
+  // DLE max_tx_time is a controller capability, not the airtime consumed by
+  // every PDU. Compute actual pacing from the current PHY and octet count.
+  const uint32_t perFullPduUs =
+      estimate_LL_PDUTimeUs(llTxOctets, phyIs2M, phyIsCoded, codedScheme);
 
   uint32_t totalUs = fullPduCount * perFullPduUs;
 

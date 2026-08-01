@@ -33,6 +33,24 @@ unsigned long           dataCountPrev   = 0;
 unsigned long           currentTime;
 unsigned long           rate            = 0;
 
+#ifdef ARDUINO_ARCH_ESP32
+const char* resetReasonName(esp_reset_reason_t reason) {
+  switch (reason) {
+    case ESP_RST_POWERON:   return "poweron";
+    case ESP_RST_EXT:       return "external";
+    case ESP_RST_SW:        return "software";
+    case ESP_RST_PANIC:     return "panic";
+    case ESP_RST_INT_WDT:   return "interrupt watchdog";
+    case ESP_RST_TASK_WDT:  return "task watchdog";
+    case ESP_RST_WDT:       return "watchdog";
+    case ESP_RST_DEEPSLEEP: return "deep sleep";
+    case ESP_RST_BROWNOUT:  return "brownout";
+    case ESP_RST_SDIO:      return "sdio";
+    default:                return "unknown";
+  }
+}
+#endif
+
 void setup() {
   // Initialize LED
   pinMode(LED_PIN, OUTPUT);
@@ -47,6 +65,9 @@ void setup() {
 
   // Initialize PSRAM (optional check)
   #ifdef ARDUINO_ARCH_ESP32
+    esp_reset_reason_t resetReason = esp_reset_reason();
+    Serial.printf("Reset reason: %s (%d)\r\n",
+                  resetReasonName(resetReason), static_cast<int>(resetReason));
     if (psramInit()) {
       Serial.printf("PSRAM: total=%lu free=%lu\r\n", (unsigned long)ESP.getPsramSize(), (unsigned long)ESP.getFreePsram());
     } else {
@@ -137,7 +158,7 @@ void loop() {
     // Emit a fixed-length line of exactly 36 bytes (on 32-bit unsigned long):
     //   "count="(6) + %10lu (10) + " rate="(6) + %10lu (10) + "/s\r\n"(4) = 36
     // %10lu right-aligns with leading spaces
-    uint16_t dataWritten = ble.printf("count=%10lu rate=%10lu/s\r\n", dataCount, rate);
+    uint16_t dataWritten = ble.printfNonBlocking("count=%10lu rate=%10lu/s\r\n", dataCount, rate);
     if (dataWritten != 36) {
       Serial.printf("WARNING partial write %u/36 bytes\r\n",dataWritten);
       ble.printStats(Serial);

@@ -103,13 +103,13 @@ static constexpr const char     BLE_SERIAL_CHARACTERISTIC_UUID_RX[] = {"6E400002
 static constexpr const char     BLE_SERIAL_CHARACTERISTIC_UUID_TX[] = {"6E400003-B5A3-F393-E0A9-E50E24DCCA9E"};
 
 // ===== GATT / ATT payload sizing =====
-inline constexpr int8_t         RSSI_LOW_THRESHOLD              =  -80;   // low power threshold (increase power if in LOWPOWER mode)
 inline constexpr int8_t         RSSI_FAST_THRESHOLD             =  -65;   // Switch back to 2M/1M
 inline constexpr int8_t         RSSI_HYSTERESIS                 =    4;   // Prevent oscillation when near threshold
 inline constexpr int8_t         RSSI_S8_THRESHOLD               =  -82;   // go S=8 below this
-inline constexpr int8_t         RSSI_S2_THRESHOLD               =  -75;   // go S=2 below this
 inline constexpr uint32_t       RSSI_INTERVAL_MS                = 500UL;  // 0.5s
 inline constexpr uint32_t       RSSI_ACTION_COOLDOWN_MS         = 4000UL; // 4s
+inline constexpr uint8_t        RSSI_DOWNGRADE_CONFIRM_SAMPLES  = 3;
+inline constexpr uint8_t        RSSI_UPGRADE_CONFIRM_SAMPLES    = 6;
 
 // ===== LL (Link-Layer) performance knobs =====
 // If MTU is larger than LL size the GATT packets need to be fragmented on the link layer
@@ -123,6 +123,7 @@ inline constexpr uint16_t       LL_MAX_OCTETS                   =   251;    // 2
 inline constexpr uint16_t       MIN_CHUNKSIZE                   =    20;
 
 inline constexpr uint32_t       LL_DEFAULT_TIME_US              =   2120;
+inline constexpr uint32_t       LL_CODED_MAX_TIME_US            =  17040;
 
 // BLE optimizations
 static constexpr uint32_t intvl_us(uint16_t intvl)    
@@ -181,6 +182,12 @@ inline constexpr uint32_t       ESCALATE_COOLDOWN_US            = 1000000;      
 inline constexpr uint32_t       TIMEOUT_BACKOFF_NUM             = 6;              // ×1.20 on timeout
 inline constexpr uint32_t       TIMEOUT_BACKOFF_DEN             = 5;
 inline constexpr uint32_t       CONGESTION_RETRY_COOLDOWN_US    = 5000;
+inline constexpr uint32_t       CONGESTION_PERSISTENCE_US       = 1000000;
+inline constexpr uint32_t       CONGESTION_WINDOW_RESET_US      = 2000000;
+inline constexpr uint32_t       CONGESTION_LOG_INTERVAL_US      = 1000000;
+inline constexpr uint32_t       CONGESTION_HIGH_WATER_MIN_US    = 250000;
+inline constexpr uint8_t        CONGESTION_HIGH_WATER_EVENTS    = 8;
+inline constexpr uint32_t       CONGESTION_MAX_FLOOR_MULTIPLIER = 4;
 
 // min interval guard
 inline constexpr uint32_t       GUARD_NUM                       = 105;    // 105 for time adjustments
@@ -196,6 +203,9 @@ inline constexpr uint8_t        RECOVER_RETRY_MAX               = 6;
 inline constexpr uint8_t        MAX_NOTIFY_FAILS                = 3;
 
 static constexpr uint32_t       FLUSH_MAX_WAIT_MS               = 250;
+static constexpr uint32_t       WRITE_DEFAULT_TIMEOUT_MS        = 250;
+static constexpr uint32_t       TX_TASK_STACK_BYTES             = 4096;
+static constexpr uint32_t       RSSI_TASK_STACK_BYTES           = 3072;
 
 /******************************************************************************************************/
 /* Structures */
@@ -301,28 +311,40 @@ public:
            //   - TX buffer is not locked by high-water ( !txLocked )
            //   - A client is subscribed ( isSubscribed() )
   size_t   write(uint8_t b) override;
-           // enqueue single byte to TX, returns bytes written
+           // reliable bounded enqueue single byte to TX, returns bytes written
   size_t   write(const uint8_t* b, size_t n) override;  
-           // enqueue block, returns bytes written
+           // reliable bounded enqueue block, returns bytes written
   size_t   write(const char* str) { return write(reinterpret_cast<const uint8_t*>(str), strlen(str)); }
-           // enqueue C-string, returns bytes written
+           // reliable bounded enqueue C-string, returns bytes written
   size_t   write(const String& s) { return write(reinterpret_cast<const uint8_t*>(s.c_str()), s.length()); }
-           // enqueue String, returns bytes written
+           // reliable bounded enqueue String, returns bytes written
+  size_t   writeNonBlocking(uint8_t b);
+           // non-blocking enqueue single byte to TX, returns bytes written
+  size_t   writeNonBlocking(const uint8_t* b, size_t n);
+           // non-blocking enqueue block, returns bytes written
+  size_t   writeNonBlocking(const char* str) { return writeNonBlocking(reinterpret_cast<const uint8_t*>(str), strlen(str)); }
+           // non-blocking enqueue C-string, returns bytes written
+  size_t   writeNonBlocking(const String& s) { return writeNonBlocking(reinterpret_cast<const uint8_t*>(s.c_str()), s.length()); }
+           // non-blocking enqueue String, returns bytes written
   size_t   print(const char* str) { return write(reinterpret_cast<const uint8_t*>(str), strlen(str)); }
-           // alias to enqueue C-string (alias to write), returns bytes written
+           // alias to reliable bounded enqueue C-string, returns bytes written
   size_t   print(const String& s) { return write(reinterpret_cast<const uint8_t*>(s.c_str()), s.length()); }
-           // alias to enqueue String (alias to write), returns bytes written
-  size_t   println(const char* str) { size_t r=write(reinterpret_cast<const uint8_t*>(str), strlen(str)); write('\r'); write('\n'); return r+2; }
+           // alias to reliable bounded enqueue String, returns bytes written
+  size_t   println(const char* str);
            // enqueue C-string with CRLF, returns total bytes written
-  size_t   println(const String& s) {
-              size_t n = write(reinterpret_cast<const uint8_t*>(s.c_str()), s.length());
-              n += write(reinterpret_cast<const uint8_t*>("\r\n"), 2);
-              return n; }  
+  size_t   println(const String& s);
+           // enqueue String with CRLF, returns total bytes written
   size_t   printf(const char *fmt, ...) __attribute__((format(printf, 2, 3)));
-           // formatted print to TX buffer
+           // reliable bounded formatted print to TX buffer
+  size_t   printfNonBlocking(const char *fmt, ...) __attribute__((format(printf, 2, 3)));
+           // non-blocking formatted print to TX buffer
   size_t   writeTimeout(const uint8_t* p, size_t n, uint32_t timeoutMs = 50);
            // blocking write with timeout, returns number of bytes written
            //   ensure all bytes are queued or timeout expires
+  void     setWriteTimeoutMs(uint32_t timeoutMs) { writeTimeoutMs = timeoutMs; }
+           // configure timeout used by write(), print(), println(), and printf()
+  uint32_t getWriteTimeoutMs() const { return writeTimeoutMs; }
+           // current timeout used by write(), print(), println(), and printf()
   size_t   writeAvailable() const { return txBuf.capacity() - txBuf.available(); }
            // bytes free in TX buffer
 
@@ -535,6 +557,7 @@ private:
   RingBuffer<uint8_t, 4096> txBuf;         // 4k default, 8k for steady high rate, 2k for tight RAM
   size_t            highWater         = 0;
   size_t            lowWater          = 0;
+  uint32_t          writeTimeoutMs    = WRITE_DEFAULT_TIMEOUT_MS;
   volatile size_t   pendingLen        = 0;
   uint8_t           pending[BLE_SERIAL_MAX_GATT]{};
   volatile bool     txLocked          = false; // prevent producers when high water reached
@@ -566,9 +589,16 @@ private:
   volatile int8_t   rssiAvg           = 0;
   volatile uint32_t lastRSSIMs        = 0;
   volatile uint32_t lastRSSIActionMs  = 0;
+  volatile uint8_t  rssiCandidatePhyMask = 0;
+  volatile uint8_t  rssiCandidateCodedScheme = 0;
+  volatile uint8_t  rssiCandidateCount = 0;
 
   // Congestion
   volatile uint32_t lastCongestionAtUs= 0; // timestamp of last congestion/backpressure
+  volatile uint32_t congestionWindowStartUs = 0;
+  volatile uint32_t lastCongestionLogUs = 0;
+  volatile uint8_t  congestionEvents = 0;
+  volatile uint8_t  congestionHighWaterEvents = 0;
 
   // TX pump and helpers
   void              pumpTx();
@@ -579,7 +609,7 @@ private:
                     // computes send interval based on chunk size and negotiated link timing
   void              updateWaterMarks(size_t chunkSize);
                     // compute low /  high water mark for TX flow control
-  void              updateTxTiming();
+  void              updateTxTiming(bool resetPacing = false);
                     // recompute TX timing parameters
   uint32_t          estimate_LL_PDUTimeUs(uint16_t llOctets, bool phy2M, bool phyCoded, uint8_t codedScheme);
   inline uint32_t   estimate_LL_PDUTimeUs()                { return estimate_LL_PDUTimeUs(static_cast<uint16_t>(llTxOctets), static_cast<bool>(phyIs2M), static_cast<bool>(phyIsCoded), static_cast<uint8_t>(codedScheme)); }
@@ -587,6 +617,10 @@ private:
                     // computes estimted LL PDU time based on current PHY/DLE settings
   void              adjustLink();   
                     // Link adaptation based on RSSI
+  void              resetRSSIDecision();
+                    // clear a pending RSSI-driven PHY decision
+  void              resetCongestionWindow();
+                    // clear congestion persistence evidence
   static uint16_t   micBytes(Security sec);
                     // returns MIC bytes for given security level
   uint32_t          computePerEventShareUs(uint32_t connInt, uint16_t connLat, uint32_t pdus_per_window);

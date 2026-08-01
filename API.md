@@ -6,7 +6,11 @@
 * begin(mode, deviceName, securityMode, pairingPolicy) – Same as above, with explicit onboarding policy for new peers.
 * end() – Stop advertising, disconnect client (if any), free resources, reset internal state.
 
-Supported mode is Fast, Long Range, Low Power and Balanced.
+Supported modes are Fast, LongRange, LowPower, and Balanced. Fast adapts between
+2M and 1M PHY; LongRange remains coded and adapts between S=2 and S=8;
+LowPower and Balanced remain on 1M. See `Operation_Modes.md` for connection,
+MTU, power, and pacing defaults. PHY changes require consecutive filtered-RSSI
+decisions and use separate downgrade and upgrade confirmation counts.
 Supported security is None, JustWorks and PasskeyDisplay.
 Supported pairing policies are AlwaysOpen, Windowed and BondedOnly.
 
@@ -15,12 +19,37 @@ Supported pairing policies are AlwaysOpen, Windowed and BondedOnly.
 * available() / readAvailable() – Bytes currently buffered in RX ring.
 * read() / read(dst, n) – Pop one / up to n bytes from RX ring.
 * peek() / peek(dst, n) – Inspect one / up to n bytes without consuming.
-* write(b) / write(buf, n) – Non-blocking enqueue to TX ring (may be partial if flow control blocks). Returns actual number of bytes written.
-* write(const char*) / print(str) / println(str) – Convenience text output (println adds CRLF).
-* printf(fmt, ...) – Formatted print into TX ring (truncates at local buffer size).
-* writeTimeout(buf, n, timeoutMs) – Attempt to enqueue up to n bytes within timeout; cooperatively waits for buffer space/unlock; decoupled from in-flight notifies (pop-based staging).
+* write(b) / write(buf, n) – Reliable bounded enqueue to TX ring using the
+  configured write timeout. Returns the actual number of bytes queued.
+* write(const char*) / print(str) / println(str) – Reliable bounded text output.
+  `println()` adds CRLF only after the payload is accepted.
+* printf(fmt, ...) – Reliable bounded formatted print into TX ring; truncates at
+  the local formatting buffer size.
+* writeNonBlocking(...) / printfNonBlocking(fmt, ...) – Explicit non-blocking TX
+  enqueue for high-rate streaming; may be partial if flow control blocks.
+* writeTimeout(buf, n, timeoutMs) – Attempt to enqueue up to n bytes within
+  timeout; cooperatively waits for buffer space/unlock; decoupled from in-flight
+  notifies (pop-based staging).
+* setWriteTimeoutMs(timeoutMs) / getWriteTimeoutMs() – Configure/query the
+  default timeout used by `write()`, `print()`, `println()`, and `printf()`. The
+  default is 250 ms.
 * writeReady() – True if a client is subscribed and producer lock is not asserted.
 * writeAvailable() – Remaining free space in TX ring (capacity - used).
+
+### TX Write Behavior
+
+* Normal Arduino `Print` paths are reliable and bounded by default. `write()`,
+  `print()`, `println()`, and `printf()` wait up to `getWriteTimeoutMs()` for
+  TX ring space before returning a short count.
+* The timeout applies only to enqueueing bytes into BLESerial's TX ring. Actual
+  BLE notification delivery remains asynchronous and is handled by the TX state
+  machine and pump mode.
+* High-rate streaming code should use `writeReady()` plus
+  `writeNonBlocking()` or `printfNonBlocking()` to preserve the high-water /
+  low-water producer lock behavior without blocking the producer loop.
+* Always check the returned byte count. A short count means only that many bytes
+  were queued; the unqueued remainder is counted in `TxDrops` when the write
+  started while subscribed.
 
 ### Pumping / Scheduling
 
@@ -28,6 +57,22 @@ Supported pairing policies are AlwaysOpen, Windowed and BondedOnly.
 * flush() – Drain queued and in-flight TX within its bounded wait. In task mode it wakes the TX worker; in polling mode it pumps locally.
 * setPumpMode(Polling | Task) – Select manual loop pumping or ESP32 FreeRTOS background task. If task creation fails, the library falls back to Polling; use `getPumpMode()` in the loop.
 * getPumpMode() – Current mode.
+
+### Adaptive TX Pacing
+
+* Successful notifications establish the last-known-good (LKG) pacing interval.
+  After a clean success window, bounded probes may reduce the interval toward the
+  negotiated connection-event share.
+* An isolated congestion result such as `ENOMEM` cancels an active probe and
+  returns to the exact confirmed LKG. The connection-event share is used only
+  when no confirmed LKG exists.
+* General congestion must continue for at least one second before increasing the
+  LKG. High-water congestion may react sooner, but requires at least eight
+  consecutive high-water congestion events spanning 250 ms.
+* Congestion escalation is gradual and capped at four times the computed pacing
+  floor. After 64 successful notifications, probing may resume.
+* `getBytesTx()` is a cumulative count of successfully transmitted application
+  payload bytes. The library does not calculate a bytes-per-second rate.
 
 ### Link / Radio
 
@@ -74,13 +119,18 @@ Notes:
 * getMinInterval() – Current computed minimum viable send interval based on negotiated link parameters.
 * getRSSI() – Smoothed RSSI average.
 * getMac() – Device MAC address string.
-* getllTxOctets() / getllTxTimeUs() – Negotiated Link Layer TX octets/time.
-* getllRxOctets() / getllRxTimeUs() – Negotiated Link Layer RX octets/time.
+* getllTxOctets() / getllTxTimeUs() – Negotiated Link Layer TX octets and DLE
+  maximum TX time. The maximum time is a controller capability, not actual PDU
+  airtime; `printStats()` reports estimated TX airtime separately.
+* getllRxOctets() / getllRxTimeUs() – Negotiated Link Layer RX octets and DLE
+  maximum RX time.
 * getBytesTx() / getBytesRx() – Cumulative application payload bytes transmitted / received.
 * getTxUsed() / getRxUsed() – Bytes currently queued in TX / RX rings.
 * getTxCapacity() / getRxCapacity() – Total ring capacities.
 * getTxFree() / getRxFree() – Remaining free space in TX / RX rings.
-* getTxDrops() / getRxDrops() – Dropped bytes due to buffer saturation; RX drops include evicted queued bytes and received bytes beyond ring capacity.
+* getTxDrops() / getRxDrops() – Dropped bytes. TX drops include producer-side
+  write timeout remainders and discarded staged TX bytes. RX drops include
+  evicted queued bytes and received bytes beyond ring capacity.
 * getLowWaterMark() / getHighWaterMark() – Current low/high water marks used for TX flow control.
 * getPairingPolicy() – Current onboarding policy for new peers.
 * isPairingWindowOpen() – True while new peer pairing is temporarily permitted.
@@ -89,7 +139,7 @@ Notes:
 
 * Tx state machine – Internal: transmission advances through Waiting → Staging → Pending → Recovering/Discarding based on notify outcomes
 * txLocked – Internal: producer lock engaged (high-water limit reached; unlocks at low-water).
-  Use writeReady() before writing and check if all data was successfully written.
+  Use writeReady() before writeNonBlocking()/printfNonBlocking() and check if all data was successfully written.
 
 ### Implemented Setters
 
@@ -102,6 +152,7 @@ Notes:
 * setPower() – sets power level for Advertising, Scanning or Connection
 * setInterval(interval) – sets transmission interval in microseconds, auto adjusted during runtime
 * getInterval() – current pacing interval (µs)
+* setWriteTimeoutMs(timeoutMs) / getWriteTimeoutMs() – default bounded wait used by `write()`, `print()`, `println()`, and `printf()`
 
 ### Implemented Status Queries
 
