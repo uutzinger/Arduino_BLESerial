@@ -37,13 +37,14 @@ void setup() {
   // Initialize PSRAM (optional check)
   #ifdef ARDUINO_ARCH_ESP32
     if (psramInit()) {
-      Serial.printf("PSRAM: total=%d free=%d\r\n", ESP.getPsramSize(), ESP.getFreePsram());
+      Serial.printf("PSRAM: total=%lu free=%lu\r\n", (unsigned long)ESP.getPsramSize(), (unsigned long)ESP.getFreePsram());
     } else {
       Serial.println("No PSRAM available.");
     }
   #endif
 
   ble.setPumpMode(useTaskPump ? BLESerial::PumpMode::Task : BLESerial::PumpMode::Polling);
+  // ble.setPreferredMTU(517);           // set local preference before begin; the central negotiates it
 
   if (!ble.begin(
         BLESerial::Mode::Fast,        /*Fast, LowPower, LongRange, Balanced*/
@@ -65,7 +66,6 @@ void setup() {
 
   // Optionally configure parameters
   // ble.setPower(BLE_TX_DBP9, PWR_ALL); // set transmit power, check src/BLESerial.h for options
-  // ble.requestMTU(517);                // set desired MTU, max 517, default is 247, minimum 23
 
 }
 
@@ -74,7 +74,7 @@ void loop() {
 
   // BLE Serial Update
   // =======================================================
-  if (!useTaskPump) {
+  if (ble.getPumpMode() == BLESerial::PumpMode::Polling) {
     ble.update(); // polling pump
   }
 

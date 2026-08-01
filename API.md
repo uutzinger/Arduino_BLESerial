@@ -26,12 +26,14 @@ Supported pairing policies are AlwaysOpen, Windowed and BondedOnly.
 
 * update() – Call periodically when in Polling pump mode (non-ESP32 or when PumpMode::Polling selected) to advance TX/RSSI logic.
 * flush() – Drain queued and in-flight TX within its bounded wait. In task mode it wakes the TX worker; in polling mode it pumps locally.
-* setPumpMode(Polling | Task) – Select manual loop pumping or ESP32 FreeRTOS background task.
+* setPumpMode(Polling | Task) – Select manual loop pumping or ESP32 FreeRTOS background task. If task creation fails, the library falls back to Polling; use `getPumpMode()` in the loop.
 * getPumpMode() – Current mode.
 
 ### Link / Radio
 
-* requestMTU(newMtu) – Request peer to negotiate a higher MTU (subject to controller/peer limits).
+* setPreferredMTU(newMtu) – Set the local preferred ATT MTU, clamped to 23–517. Call before `begin()` when possible. This does not initiate MTU exchange; a connected central negotiates the active MTU. Before `begin()` it returns configuration success; after initialization it returns the underlying NimBLE result.
+* getPreferredMTU() – Local ATT MTU preference used for future peer exchanges.
+* requestMTU(newMtu) – Deprecated compatibility alias for `setPreferredMTU()`.
 * setPower(dBm, scope) – Adjust transmit power for Advertising, Scanning, Connection, or All.
 
 ### Security
@@ -55,7 +57,7 @@ Notes:
 
 ### Diagnostics / Logging
 
-* setLogLevel(level) / getLogLevel() – Control logger verbosity (`LOG_LEVEL_NONE`, `LOG_LEVEL_ERROR`, `LOG_LEVEL_WARN`, `LOG_LEVEL_INFO`, `LOG_LEVEL_DEBUG`). Debug output is compiled only when `DEBUG` is defined before including the logger.
+* setLogLevel(level) / getLogLevel() – Control the shared `UUtzinger_logger` verbosity (`LOG_LEVEL_NONE`, `LOG_LEVEL_ERROR`, `LOG_LEVEL_WARN`, `LOG_LEVEL_INFO`, `LOG_LEVEL_DEBUG`). A sketch may instead call `logSetLevel()` directly; `begin()` preserves that global setting. Debug output is compiled only when `DEBUG` is defined before including the logger.
 * printStats([stream]) – Emit current link, buffer, and error counters.
 
 ### Status / Introspection
@@ -63,7 +65,7 @@ Notes:
 * isConnected() – True if a client connection is active.
 * isSubscribed() – True if client subscribed to TX characteristic (notify/indicate enabled).
 * getMode() – Configured operating Mode (Fast, LowPower, LongRange, Balanced).
-* getMtu() – Negotiated ATT MTU.
+* getMtu() – Active negotiated ATT MTU; returns 23 while disconnected.
 * isEncrypted() – True if connection has active encryption.
 * getPhy() – "1M", "2M", or "Coded" (current PHY).
 * getChunkSize() – Current notify payload chunk size (bytes per notification attempt).
@@ -91,10 +93,12 @@ Notes:
 
 ### Implemented Setters
 
-* setLogLevel(level) – Verbosity level of logger output (defaults to Serial unless redirected with `logSetOutput()`)
-* requestMTU(mtu) – Modify  MTU, will result in renegotiation with client
+* setLogLevel(level) – Shared logger verbosity (defaults to Serial unless redirected with `logSetOutput()`); `begin()` does not change a sketch-selected level.
+* setPreferredMTU(mtu) – Set the local ATT MTU preference; a central initiates any MTU exchange.
+* getPreferredMTU() – Local ATT MTU preference.
+* requestMTU(mtu) – Deprecated compatibility alias for `setPreferredMTU()`.
 * getPumpMode() – Current pump mode
-* setPumpMode(Polling|Task) – Polling, or ESP32 task mode which runs a background FreeRTOS TX pump
+* setPumpMode(Polling|Task) – Polling, or ESP32 task mode which runs a background FreeRTOS TX pump; task creation failure falls back to Polling
 * setPower() – sets power level for Advertising, Scanning or Connection
 * setInterval(interval) – sets transmission interval in microseconds, auto adjusted during runtime
 * getInterval() – current pacing interval (µs)

@@ -34,9 +34,9 @@ void setup() {
 }
 
 void loop() {
-  #ifndef ARDUINO_ARCH_ESP32
-    ble.update(); // required in Polling mode
-  #endif
+  if (ble.getPumpMode() == BLESerial::PumpMode::Polling) {
+    ble.update();
+  }
 
   // Parse incoming lines from BLE
   if (lr.poll(ble, line, sizeof(line))) {

@@ -32,6 +32,8 @@ Installation occurs through the Arduino library manager.
 - [NimBLE-Arduino](https://github.com/h2zero/NimBLE-Arduino)
 - [UUtzinger_RingBuffer](https://github.com/uutzinger/Arduino_RingBuffer)
 
+BLESerial uses the shared `UUtzinger_logger` level. Configure it with `logSetLevel()` before or after `ble.begin()`; BLESerial does not override the sketch's logger setting.
+
 ## Quick Start
 
 Minimal example demonstrating setup, polling versus task (ESP32) mode, command parsing, and date transmission and receiving:
@@ -63,9 +65,9 @@ void setup() {
 }
 
 void loop() {
-  #ifndef ARDUINO_ARCH_ESP32
-  ble.update(); // required in Polling mode
-  #endif
+  if (ble.getPumpMode() == BLESerial::PumpMode::Polling) {
+    ble.update();
+  }
 
   // Parse incoming lines from BLE
   if (lr.poll(ble, line, sizeof(line))) {

@@ -29,6 +29,8 @@ writeAvailable KEYWORD2
 flush KEYWORD2
 update KEYWORD2
 requestMTU KEYWORD2
+setPreferredMTU KEYWORD2
+getPreferredMTU KEYWORD2
 setPumpMode KEYWORD2
 getPumpMode KEYWORD2
 setPower KEYWORD2

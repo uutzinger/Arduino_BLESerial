@@ -5,8 +5,8 @@ Short recipes for common goals. Adjust as needed for your environment.
 ### Fast (throughput + low latency)
 
 ```cpp
+ble.setPreferredMTU(BLE_SERIAL_MAX_MTU); // central negotiates when it connects
 ble.begin(BLESerial::Mode::Fast, "BLEFast", BLESerial::Security::None);
-ble.requestMTU(BLE_SERIAL_MAX_MTU);   // if peer supports
 ble.setPower(+6, PWR_CONN);           // tune +3..+9 dBm
 ```
 
@@ -18,8 +18,8 @@ Tips:
 ### Balanced (middle ground)
 
 ```cpp
+ble.setPreferredMTU(BLE_SERIAL_DEFAULT_MTU); // central negotiates when it connects
 ble.begin(BLESerial::Mode::Balanced, "BLEBalanced", BLESerial::Security::None);
-ble.requestMTU(BLE_SERIAL_DEFAULT_MTU);
 ble.setPower(+3, PWR_CONN);           // tune +0..+6 dBm
 ```
 
@@ -30,8 +30,8 @@ Tips:
 ### LongRange (coverage on coded PHY)
 
 ```cpp
+ble.setPreferredMTU(BLE_SERIAL_MIN_MTU); // central negotiates when it connects
 ble.begin(BLESerial::Mode::LongRange, "BLELongRange", BLESerial::Security::None);
-ble.requestMTU(BLE_SERIAL_MIN_MTU);
 ble.setPower(+9, PWR_CONN);           // within local/regulatory limits
 ```
 
@@ -43,8 +43,8 @@ Tips:
 ### LowPower (minimize airtime)
 
 ```cpp
+ble.setPreferredMTU(BLE_SERIAL_MIN_MTU); // central negotiates when it connects
 ble.begin(BLESerial::Mode::LowPower, "BLELowPower", BLESerial::Security::None);
-ble.requestMTU(BLE_SERIAL_MIN_MTU);
 ble.setPower(0, PWR_CONN);            // tune -6 .. 0 dBm conservative power
 ble.setPumpMode(BLESerial::PumpMode::Polling); // update transmission in main loop
 ```

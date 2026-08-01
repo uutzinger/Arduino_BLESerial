@@ -68,7 +68,7 @@ extern "C" {
 /* Constants   */
 /******************************************************************************************************/
 
-#define BLE_SERIAL_VERSION_STRING "BLE Serial Library v1.2.1"
+#define BLE_SERIAL_VERSION_STRING "BLE Serial Library v1.3.0"
 #define BLE_SERIAL_APPEARANCE 0x0540 // Generic Sensor
 
 // Max GATT MTU supported (ESP32 max 517); 
@@ -329,9 +329,12 @@ public:
   // ----------------------------------------------------------------------------------------------
   // Link / radio adjustments
   // ----------------------------------------------------------------------------------------------
-  bool     requestMTU(uint16_t newMtu);                 
-           // request a different MTU from client
-           // Note: After negotiation, txChunkSize and timing are updated when the MTU change event arrives.
+  bool     setPreferredMTU(uint16_t newMtu);
+           // Set the local ATT MTU preference. This does not initiate an exchange with a connected peer.
+  uint16_t getPreferredMTU() const { return preferredMtu; }
+  [[deprecated("Use setPreferredMTU()")]]
+  bool     requestMTU(uint16_t newMtu) { return setPreferredMTU(newMtu); }
+           // Compatibility alias for setting the local ATT MTU preference.
   void     setPower(int8_t dBm, NimBLETxPowerType scope = PWR_ALL); 
            // change radio power for adv/scan/conn/all 3
   void     setPairingPolicy(PairingPolicy policy);
@@ -351,7 +354,7 @@ public:
            // In polling mode we need to update driver regularly in the main loop
   PumpMode getPumpMode() const { return pumpMode; }
   #ifdef ARDUINO_ARCH_ESP32
-    void   setPumpMode(PumpMode m); // selects Polling or Task mode
+    void   setPumpMode(PumpMode m); // selects Polling or Task mode; Task may fall back to Polling
   #else
     void   setPumpMode(PumpMode m) { pumpMode = PumpMode::Polling; } // no Task on non-ESP32
   #endif
@@ -361,7 +364,8 @@ public:
   // ----------------------------------------------------------------------------------------------
   // Logging / diagnostics
   // ----------------------------------------------------------------------------------------------
-  void     setLogLevel(uint8_t lvl) { logLevelConfigured = true; logSetLevel(lvl); }
+  void     setLogLevel(uint8_t lvl) { logSetLevel(lvl); }
+           // Controls the shared UUtzinger_logger level for the entire sketch.
   uint8_t  getLogLevel() const { return static_cast<uint8_t>(logGetLevel()); }
   void     printStats(Stream &out);
   void     printStats() { printStats(Serial); }
@@ -405,7 +409,7 @@ public:
   // ----------------------------------------------------------------------------------------------
   bool     isConnected()   const { return deviceConnected && connHandle != BLE_HS_CONN_HANDLE_NONE; }
   bool     isSubscribed()  const { return deviceConnected && clientSubscribed; }
-  uint16_t getMtu()        const { return mtu; }
+  uint16_t getMtu()        const { return mtu; } // negotiated ATT MTU; 23 when disconnected
   Mode     getMode()       const { return mode; }
   uint32_t getBytesRx()    const { return bytesRx; }
   uint32_t getBytesTx()    const { return bytesTx; }
@@ -485,7 +489,9 @@ private:
   uint16_t          desiredllRxTimeUs = LL_DEFAULT_TIME_US;     // conservative time cap
 
   // MTU / chunking
-  volatile uint16_t mtu               = 23;
+  uint16_t          preferredMtu      = BLE_SERIAL_DEFAULT_MTU;
+  bool              preferredMtuConfigured = false;
+  volatile uint16_t mtu               = BLE_SERIAL_MIN_MTU; // negotiated ATT MTU
   volatile uint16_t txChunkSize       = MIN_CHUNKSIZE;
  
   // Recovery Retries
@@ -541,8 +547,6 @@ private:
   // On Status Code
   volatile int      onStatusCode      = 0;
 
-  bool              logLevelConfigured = false;
-
   int8_t            powerAdv          = BLE_TX_DB0;
   int8_t            powerScan         = BLE_TX_DB0;
   int8_t            powerConn         = BLE_TX_DB0;
@@ -593,6 +597,7 @@ private:
   void              expirePairingWindowIfNeeded();
   void              applyPairingPolicy(bool restartAdvertising = true);
   void              syncWhiteListFromBonds();
+  void              cleanupAfterBeginFailure();
 
     // Background task helpers and per-instance state locks (ESP32)
   #ifdef ARDUINO_ARCH_ESP32
@@ -628,6 +633,9 @@ private:
   friend class ServerCallbacks;
   friend class RxCallbacks;
   friend class TxCallbacks;
+
+  RxCallbacks* rxCallbacks = nullptr;
+  TxCallbacks* txCallbacks = nullptr;
 
   std::function<void(const std::string& addr)> onClientConnect;
   std::function<void(const std::string& addr, uint16_t reason)> onClientDisconnect;
