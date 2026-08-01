@@ -103,6 +103,14 @@ Notes:
 ### Diagnostics / Logging
 
 * setLogLevel(level) / getLogLevel() – Control the shared `UUtzinger_logger` verbosity (`LOG_LEVEL_NONE`, `LOG_LEVEL_ERROR`, `LOG_LEVEL_WARN`, `LOG_LEVEL_INFO`, `LOG_LEVEL_DEBUG`). A sketch may instead call `logSetLevel()` directly; `begin()` preserves that global setting. Debug output is compiled only when `DEBUG` is defined before including the logger.
+* setDiagnosticOutput(output) – Select the dedicated `Print` destination for
+  BLESerial-owned diagnostics. It defaults to `Serial`, accepts UARTs and custom
+  `Print` implementations such as a flash-file adapter, and returns `false`
+  without changing the destination when passed the BLESerial object itself.
+  Configure it before `begin()` and keep the supplied object alive while
+  BLESerial may emit diagnostics.
+* BLESerial diagnostics do not follow the global `logSetOutput()` destination.
+  Application `LOG()` / `LOGln()` output is unaffected and may target BLE.
 * printStats([stream]) – Emit current link, buffer, and error counters.
 
 ### Status / Introspection
@@ -144,6 +152,8 @@ Notes:
 ### Implemented Setters
 
 * setLogLevel(level) – Shared logger verbosity (defaults to Serial unless redirected with `logSetOutput()`); `begin()` does not change a sketch-selected level.
+* setDiagnosticOutput(output) – Dedicated BLESerial diagnostic `Print`; defaults
+  to `Serial` and rejects the BLESerial object itself.
 * setPreferredMTU(mtu) – Set the local ATT MTU preference; a central initiates any MTU exchange.
 * getPreferredMTU() – Local ATT MTU preference.
 * requestMTU(mtu) – Deprecated compatibility alias for `setPreferredMTU()`.

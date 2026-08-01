@@ -35,8 +35,14 @@ Installation occurs through the Arduino library manager.
 
 - [NimBLE-Arduino](https://github.com/h2zero/NimBLE-Arduino)
 - [UUtzinger_RingBuffer](https://github.com/uutzinger/Arduino_RingBuffer)
+- [UUtzinger_logger](https://github.com/uutzinger/logger)
 
-BLESerial uses the shared `UUtzinger_logger` level. Configure it with `logSetLevel()` before or after `ble.begin()`; BLESerial does not override the sketch's logger setting.
+BLESerial uses the shared `UUtzinger_logger` level but has a dedicated diagnostic
+output that defaults to `Serial`. Configure it before `begin()` with
+`ble.setDiagnosticOutput(Serial1)` or any application-provided `Print`, including
+a flash-file adapter. The BLESerial object itself is rejected as a diagnostic
+destination. Application `LOG()` / `LOGln()` calls continue to follow the global
+`logSetOutput()` destination and may intentionally target BLE.
 
 ## Quick Start
 
@@ -56,6 +62,9 @@ const char helpmsg[] = "Commands: ?=help, stats, echo <text>";
 void setup() {
   Serial.begin(115200);
   while (!Serial) { /* wait for USB serial */ }
+
+  // Optional: Serial is the default. Serial1 or any custom Print is accepted.
+  ble.setDiagnosticOutput(Serial);
 
   // Security::None | JustWorks | PasskeyDisplay
   // Mode::Fast | LowPower | LongRange | Balanced
@@ -99,7 +108,8 @@ void loop() {
 - BLESerial_minimal (simple echo program)
 - BLESerial_demo (simple program listed above)
 - BLESerial_comprehensive (generates data for performance measurements)
-- BLESerial_text_stress (validates reliable large text output over USB and BLE)
+- BLESerial_text_stress (validates reliable large text output over USB and BLE;
+  the `selflog` command exercises the dedicated diagnostic route)
 
 ## Contributing
 

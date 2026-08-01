@@ -10,6 +10,7 @@ Commands from USB Serial or BLE:
   usb   send the stress block over USB Serial only
   ble   send the stress block over BLE only
   both  send the stress block over USB Serial and BLE
+  selflog route the shared logger to BLE while sending the BLE stress block
   stats print BLESerial counters to USB Serial
 
 Capture the output and compare:
@@ -23,6 +24,7 @@ Capture the output and compare:
 
 #include <Arduino.h>
 #include <BLESerial.h>
+#include <logger.h>
 
 BLESerial ble;
 
@@ -126,8 +128,9 @@ void emitStressBlock(bool toUsb, bool toBle) {
 }
 
 void printHelp(Print &out) {
-  out.println(F("Commands: ? usb ble both stats"));
+  out.println(F("Commands: ? usb ble both selflog stats"));
   out.println(F("Capture BEGIN_TEXT_STRESS through END_OF_TEST and compare bytes, lines, checksum."));
+  out.println(F("selflog verifies BLESerial diagnostics remain on their dedicated output."));
 }
 
 void handleCommand(const char *cmd, bool fromBle) {
@@ -148,6 +151,18 @@ void handleCommand(const char *cmd, bool fromBle) {
       return;
     }
     emitStressBlock(true, true);
+  } else if (strcasecmp(cmd, "selflog") == 0) {
+    if (!ble.isSubscribed()) {
+      Serial.println(F("BLE client is not subscribed; cannot run self-routed logger stress."));
+      return;
+    }
+    if (ble.setDiagnosticOutput(ble)) {
+      Serial.println(F("ERROR: BLESerial accepted itself as diagnostic output."));
+      return;
+    }
+    logSetOutput(ble);
+    emitStressBlock(false, true);
+    logSetOutput(Serial);
   } else if (strcasecmp(cmd, "stats") == 0) {
     ble.printStats(Serial);
   } else if (cmd[0] != '\0') {

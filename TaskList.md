@@ -262,3 +262,295 @@ Post-fix hardware evidence:
 - [x] At a stable PHY and connection interval, observe intermittent and persistent
   `ENOMEM`; verify isolated events hold the confirmed LKG, persistent congestion
   produces controlled escalation, and successful traffic recovers to the floor.
+
+
+## Prevent Recursive BLESerial Diagnostics
+
+### Problem Statement
+
+When `MAX30001G_BLESerial` routes the shared logger to `ble`, BLESerial's own TX
+adaptation messages can be written back into the same TX queue that is currently
+being drained. In the malformed `?` help capture, an internal
+`Probe 1948 accepted` message appears inside a help row, two complete rows are
+missing, and the following row is joined without its expected CRLF.
+
+The capture strongly suggests self-directed BLESerial diagnostics, but does not
+yet prove that recursion is the byte-loss mechanism. SerialUI normally retains
+partial BLE lines until EOL and has a 64 KiB input buffer. Manually stopping its
+receiver is a separate case because unsubscribing can lose upstream output.
+
+### P0 - Reproduce and Confirm
+
+- [x] Record `ble.printStats(Serial)` immediately before and after each test and
+  compare `TxDrops`, `Timeouts`, congestion events, and software errors.
+- [x] At the default INFO level (`l 3`), issue `?` repeatedly and capture the raw
+  bytes, including pauses, injected BLESerial diagnostics, missing rows, merged
+  rows, total byte count, and final CRLF.
+- [x] Repeat the same sequence at `l 2`. This suppresses BLESerial INFO diagnostics
+  while leaving the sketch's unconditional `LOGln()` help output enabled. The
+  compact command documented by the sketch as `l2` currently sets level `0`
+  because its parser reads the value starting at character three.
+- [x] Repeat with an independent BLE UART client to separate BLESerial behavior
+  from SerialUI rendering and notification handling.
+- [x] Confirm whether each reported stop was a passive output pause or a manual
+  SerialUI receiver stop; do not combine those cases in the result.
+- [x] Add a deterministic BLESerial regression case that routes
+  `logSetOutput(ble)`, triggers TX adaptation diagnostics while sending a payload
+  larger than the TX ring, and validates byte count, checksum, line endings, and
+  final sentinel.
+
+### Confirmed P0 Evidence (2026-08-01)
+
+- A raw Linux BlueZ/D-Bus notification capture reproduced the same missing rows
+  and merged CRLFs without SerialUI and without manually stopping reception.
+- A complete help response is `6043` bytes with `79` CRLFs and SHA-256
+  `2008900b170658850fe422b9ee968ac3ec20ba1ed5ab78ed57b47fb0f583d1b5`.
+- At INFO, three stats-correlated responses changed `Bytes TX` by `5711`, `6092`,
+  and `5877` bytes. The first added `431` `TxDrops` and `20` timeouts; the second
+  added no drops but transmitted `49` bytes beyond the help payload; the third
+  added `216` drops and `10` timeouts.
+- At WARN, the response changed `Bytes TX` by exactly `6043` while `TxDrops`
+  remained `647` and `Timeouts` remained `30`.
+- These controls confirm the loss occurs in the BLESerial/logger path, not in
+  SerialUI. Suppressing INFO is a valid temporary workaround, but the library
+  still needs to prevent any level of internal diagnostic from targeting its
+  own BLE transport.
+- The `BLESerial_text_stress` `selflog` command reproduces the recursive path
+  deterministically with a 21,605-byte payload. Before the fix it added `84`
+  `TxDrops` and `6` timeouts. With dedicated diagnostics it sent the same
+  `21,605` bytes with zero drops/timeouts; its
+  transient `ENOMEM` warning appeared only on USB Serial. The BlueZ capture
+  contained the final checksum sentinel and `BLE_WRITE_SUMMARY ... short=0`.
+- With dedicated diagnostics, five MAX30001G `?` responses at INFO increased
+  `Bytes TX` by exactly `6043` bytes each (`30215` total). `TxDrops=0` and
+  `Timeouts=0` remained unchanged. Probe start and
+  acceptance messages appeared on USB Serial but did not change the BLE payload
+  count. A persistent BlueZ subscriber received the help notifications from
+  beginning through the final CRLF.
+
+### P0 - Dedicated Internal Diagnostics
+
+- [x] Add one library-wide diagnostic helper that writes to a dedicated `Print`
+  destination, defaulting to `Serial`, without reading or changing the
+  application's global logger destination.
+- [x] Apply the dedicated route to all BLESerial diagnostics, including GAP/characteristic
+  callbacks, TX/RSSI tasks, probe success/start messages, congestion recovery,
+  timeout handling, and disconnect/error paths; fixing only the observed probe
+  message is insufficient.
+- [x] Keep application writes through `Print`, `LOG()`, and `LOGln()` unchanged.
+  Global `logSetOutput(ble)` remains valid for application output.
+- [x] Allow `Serial1`, `Serial2`, and application-provided `Print`
+  implementations as BLESerial diagnostic destinations, but reject the
+  BLESerial object itself without changing the existing destination.
+- [x] Remove the translation-unit `#undef LOG*` wrappers and route every
+  BLESerial-owned diagnostic explicitly through the dedicated helper.
+- [x] Avoid temporarily swapping the shared logger output because callbacks and
+  application tasks may log concurrently.
+- [x] Ensure dedicated diagnostics do not recurse, block the TX worker, mutate
+  TX queue contents, increment application `TxDrops`/`Timeouts`, or alter link
+  adaptation state.
+- [x] Document the dedicated-routing behavior and new diagnostic API in `API.md`,
+  `README.md`, and `CHANGELOG.md`.
+
+### P1 - Automated and Compile Validation
+
+- [x] Add focused coverage for global application logging to BLE while BLESerial
+  diagnostics remain on their dedicated non-BLE `Print`; verify self-selection
+  is rejected.
+- [ ] Force an ERROR path and verify it cannot recursively fill the queue during
+  timeout or disconnect handling. WARN routing was hardware-verified with a
+  transient `ENOMEM` event during `selflog`.
+- [ ] Re-run the deterministic text-stress test and all examples in polling and
+  task modes, with `DEBUG` both enabled and disabled.
+- [x] Compile all BLESerial examples for `esp32:esp32:nano_nora` with warnings
+  enabled and explicit local logger and RingBuffer dependencies.
+- [x] Compile `MAX30001G_BLESerial` against the local BLESerial,
+  `UUtzinger_logger`, `UUtzinger_RingBuffer`, and `UUtzinger_MAX30001G`
+  checkouts; confirm no new warnings or `LOG_LEVEL_*` redefinitions.
+- [ ] Publish `UUtzinger_logger` 2.2.1 before BLESerial 1.3.2. The BLESerial
+  metadata already declares `UUtzinger_logger (>=2.2.1)`.
+
+### P0 - Hardware Acceptance Criteria
+
+- [x] Repeated `?` output is byte-for-byte complete over BLE at `l 3`: no missing
+  `Er`/`En` rows, merged `Eq` row, injected BLESerial diagnostic, or missing CRLF.
+- [ ] The same capture passes in SerialUI and an independent BLE UART client.
+- [x] `TxDrops` and `Timeouts` do not increase during a completed help response.
+- [x] BLESerial diagnostics still reach a separately configured non-BLE sink,
+  while self-directed diagnostic configuration is rejected.
+- [ ] High-rate non-blocking streaming, adaptation, pacing, and congestion
+  recovery behavior remain unchanged.
+
+### Implementation Order
+
+1. Run the `l 3`/`l 2` control and preserve before-fix stats and raw captures.
+2. Introduce the centralized self-routing guard and migrate every internal log
+   call to it.
+3. Add regression coverage for self-directed and separate logger outputs.
+4. Run warning-enabled BLESerial and MAX30001G builds plus offline stress tests.
+5. Repeat the hardware captures and close the acceptance items only from
+   byte-count/checksum/stat evidence.
+
+### Evidence Capture
+
+The first command completed without a visible pause. The second paused twice and
+shows both missing content/CRLF and an injected BLESerial diagnostic:
+
+```text
+[INFO] BLESerial: Client e0:d4:64:23:f6:1c subscribed (notify) 6e400003-b5a3-f393-e0a9-e50e24dcca9e.
+================================================================================
+| MAX30001G ECG and Bio-Impedance Program                                      |
+| 2026 Urs Utzinger & GPT                                                      |
+================================================================================
+| GENERAL COMMANDS                       | DATA COMMANDS                       |
+|----------------------------------------|-------------------------------------|
+| ?: help screen                         | z: toggle data reporting on/off     |
+| s: show current settings               | z[s|b|a]: USB, BLE, both, off       |
+| h: run health check                    | z[S|B|A]: USB, BLE, both, on        |
+| i: print device info                   | c: reset sample counter             |
+| r: print all registers                 | f: FIFO reset                       |
+| t: print status registers              | p: print config registers           |
+================================================================================
+| PERSISTENCE                            | RAM SNAPSHOT                        |
+|----------------------------------------|-------------------------------------|
+| Ps: save NVS preferences               | (: save volatile register snapshot  |
+| Pl: load NVS preferences               | ): restore volatile register snap   |
+| Pd: print NVS preferences              |                                     |
+| Pc: clear NVS preferences              |                                     |
+|========================================|=====================================|
+| OPERATION MODES (auto-stop previous)   | START/STOP                          |
+|----------------------------------------|-------------------------------------|
+| m1: ECG mode                           | .: toggle start/stop                |
+| m2: BIOZ mode                          | >: start measurement                |
+| m3: ECG + BIOZ mode                    | <: stop measurement                 |
+| m4: ECG signal calibration             |                                     |
+| m5: BIOZ signal calibration            |                                     |
+| m6: BIOZ internal impedance            |                                     |
+| m7: BIOZ external impedance            |                                     |
+| m8: BIOZ impedance spectroscopy        |                                     |
+|========================================|=====================================|
+| ECG SETTINGS                           | BIOZ SETTINGS                       |
+|----------------------------------------|-------------------------------------|
+| Es<n>: speed      (0-2)     Es1        | Bs<n>: speed      (0-1)     Bs0     |
+| Eg<n>: gain       (0-3)     Eg2        | Bg<n>: gain       (0-3)     Bg1     |
+| El<n>: dig LPF    (0-3,255) El255      | Ba<n>: analog HPF (0-7)     Ba1     |
+| Eh<n>: dig HPF    (0-1,255) Eh255      | Bd<n>: digital LPF(0-3)     Bd1     |
+| Ee<n>: leads      (2 or 3)  Ee3        | Bh<n>: digital HPF(0-3)     Bh0     |
+| Er<n>: R-to-R     (0=off,1) Er1        |                                     |
+| En<n>: notch  (0=off,50,60) En0        | Bf<n>: frequency Hz         Bf8000  |
+| Eq<n>: notch Q    (1-100)   Eq20       | Bc<n>: current nA           Bc8000  |
+|                                        | Bp<n>: phase deg            Bp0     |
+|                                        | Bl<n>: lead bias  (0=off,1) Bl1     |
+|                                        | Bo<n>: lead-off   (0=off,1) Bo0     |
+|                                        | Bw<n>: wires      (2 or 4)  Bw2     |
+|========================================|=====================================|
+| BIOZ SCAN SETTINGS                     | INTERNAL CALIBRATION SETTINGS       |
+|----------------------------------------|-------------------------------------|
+| Sa<n>: averages   (1-8)     Sa8        | Cr<n>: internal resistor    Cr1000  |
+| Sf<n>: fast mode  (0=off,1) Sf0        | Cm<n>: cal modulation(0-3)  Cm0     |
+| Sr<n>: full range (0=off,1) Sr0        | Cf<n>: mod frequency(0-4)   Cf3     |
+| Si<n>: source     (0=ext,1=int) Si0    | Ce<n>: ECG sig mode(0/1)    Ce1     |
+| Sp<n>: phase rng  (0=full,1) Sp0       | Cb<n>: BIOZ sig mode(0/1)   Cb0     |
+| Sh<n>: AHPF mode  (0=dyn,1=fix,2=byp)  |-------------------------------------|
+| Sv<n>: fixed AHPF (0-7)     Sv1        |                                     |
+| Sx<n>: int AHPF   (255,0-7) Sx255      |                                     |
+| St<n>: settle     (1-64)    St24       | Sm<n>: max current nA       Sm96000 |
+| Sc<n>: cur settle (1-64)    Sc24       | So<n>: autorange  (0=off,1) So1     |
+|                                        | Sy<n>: human-safe (0/1)     Sy0     |
+|----------------------------------------|-------------------------------------|
+| Kp:    print scan calibration          | Kr:  reset scan calibration default |
+| Kg<n>: set global K ppm (1250650)      | Ke<n>: enable correction (0/1)      |
+|========================================|=====================================|
+| LOG LEVEL                              | SPECIAL                             |
+|----------------------------------------|-------------------------------------|
+| l0: none (silent)                      | w: software reset                   |
+| l1: errors only                        | y: synchronize                      |
+| l2: warnings                           | k: clear latched status flags       |
+| l3: info (default)                     | a: apply current settings (re-setup)|
+| l4: debug (verbose)                    |                                     |
+================================================================================
+
+Examples:
+  m1       - Switch to ECG mode
+  Eg3      - Set ECG gain to 160 V/V (level 3)
+  Bf40000  - Set BIOZ frequency to 40 kHz
+  .        - Start/stop measurement
+  z        - Toggle continuous data display
+
+================================================================================
+| MAX30001G ECG and Bio-Impedance Program                                      |
+| 2026 Urs Utzinger & GPT                                                      |
+================================================================================
+| GENERAL COMMANDS                       | DATA COMMANDS                       |
+|----------------------------------------|-------------------------------------|
+| ?: help screen                         | z: toggle data reporting on/off     |
+| s: show current settings               | z[s|b|a]: USB, BLE, both, off       |
+| h: run health check                    | z[S|B|A]: USB, BLE, both, on        |
+| i: print device info                   | c: reset sample counter             |
+| r: print all registers                 | f: FIFO reset                       |
+| t: print status registers              | p: print config registers           |
+================================================================================
+| PERSISTENCE                            | RAM SNAPSHOT                        |
+|----------------------------------------|-------------------------------------|
+| Ps: save NVS preferences               | (: save volatile register snapshot  |
+| Pl: load NVS preferences               | ): restore volatile register snap   |
+| Pd: print NVS preferences              |                                     |
+| Pc: clear NVS preferences              |                                     |
+|========================================|=====================================|
+| OPERATION MODES (auto-stop previous)   | START/STOP                          |
+|----------------------------------------|-------------------------------------|
+| m1: ECG mode                           | .: toggle start/stop                |
+| m2: BIOZ mode                          | >: start measurement                |
+| m3: ECG + BIOZ mode                    | <: stop measurement                 |
+| m4: ECG signal calibration             |                                     |
+| m5: BIOZ signal calibration            |                                     |
+| m6: BIOZ internal impedance            |                                     |
+| m7: BIOZ external impedance            |                                     |
+| m8: BIOZ impedance spectroscopy        |                                     |
+|========================================|=====================================|
+| ECG SETTINGS                           | BIOZ SETTINGS                       |
+|----------------------------------------|-------------------------------------|
+| Es<n>: speed      (0-2)     Es1        | Bs<n>: speed      (0-1)     Bs0     |
+| Eg<n>: gain       (0-3)     Eg2        | Bg<n>: gain       (0-3)     Bg1     |
+| El<n>: dig LPF    (0-3,255) El255      | Ba<n>: analog HPF (0-7)     Ba1     |
+| Eh<n>: dig HPF    (0-1,255) Eh255      | Bd<n>: digital LPF(0-3)     Bd1     |
+| Ee<n>: leads      (2 or 3)  Ee3        | Bh<n>: digital HPF(0-3)     Bh0     || Eq<n>: notch Q    (1-100)   Eq20       | Bc<n>: current nA           Bc8000  |
+|                                        | Bp<n>: phase deg            Bp0     |
+|                                        | Bl<n>: lead bias  (0=off,1) Bl1     |
+|                                        | Bo<n>: lead-off   (0=off,1) Bo0     |
+|                                        | Bw<n>: wires      (2 or 4)  Bw2     |
+|========================================|=====================================|
+| BIOZ SCAN SETTINGS                     | INTERNAL CALIBRATION SETTINGS       |
+|----------------------------------------|-------------------------------------|
+| Sa<n>: averages   (1-8)     Sa8        | Cr<n>: internal resistor    Cr1000  |
+| Sf<n>: fast mode  (0=off,1) Sf0        | Cm<n>: cal modulation(0-3)  Cm0     |
+| Sr<n>: full range (0=off,1) Sr0        | Cf<n>: mod frequency(0-4)   Cf3     |
+| Si<n>: source     (0=ext,1=int) Si0    | Ce<n>: ECG sig mode(0/1)    Ce1     |
+| Sp<n>: phase rng  (0=full,1) Sp0       | Cb<n>: BIOZ sig mode(0/1)   Cb0     |
+| Sh<n>: AHPF mode  (0=dyn,1=fix,2=byp)  |-------------------------------------|
+| Sv<n>: fixed AHPF (0-7)     Sv1        |                                     |
+| Sx<n>: int AHPF   (255,0-7) Sx255      |                                     |
+| St<n>: settle     (1-64)    St24       | Sm<n>: max current nA       Sm96000 |
+| Sc<n>: cur settle (1-64)    Sc24       | So<n>: autorange  (0=off,1) So1     |
+|                                        | Sy<n>: human-safe (0/1)     Sy0     |
+|----------------------------------------|-------------------------------------|
+| Kp:    print scan calibration          | Kr:  reset scan calibration default |
+| Kg<n>: set global K ppm (1250650)      | Ke<n>: enable correction (0/1)      |
+|========================================|=====================================|
+| LOG LEVEL                              | SPECIAL                             |
+|----------------------------------------|-------------------------------------|
+| l0: none (silent)                      | w: software reset                   |
+| l1: errors only                        | y: synchronize                      |[INFO] BLESerial: Probe 1948 accepted. LKG=1948.
+
+| l2: warnings                           | k: clear latched status flags       |
+| l3: info (default)                     | a: apply current settings (re-setup)|
+| l4: debug (verbose)                    |                                     |
+================================================================================
+
+Examples:
+  m1       - Switch to ECG mode
+  Eg3      - Set ECG gain to 160 V/V (level 3)
+  Bf40000  - Set BIOZ frequency to 40 kHz
+  .        - Start/stop measurement
+  z        - Toggle continuous data display
+```

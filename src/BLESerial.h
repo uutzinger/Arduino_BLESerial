@@ -389,6 +389,9 @@ public:
   void     setLogLevel(uint8_t lvl) { logSetLevel(lvl); }
            // Controls the shared UUtzinger_logger level for the entire sketch.
   uint8_t  getLogLevel() const { return static_cast<uint8_t>(logGetLevel()); }
+  bool     setDiagnosticOutput(Print& output);
+           // BLESerial diagnostics use this dedicated output (Serial by default).
+           // The BLESerial instance itself is rejected to prevent recursive TX.
   void     printStats(Stream &out);
   void     printStats() { printStats(Serial); }
   void     clearStats();
@@ -479,6 +482,7 @@ private:
   static int gapEventHandler(struct ble_gap_event* ev, void* arg);
   // Active instance used by the static GAP handler
   static BLESerial* active;
+  static void diagnostic(int level, const char* label, const char* format, ...);
 
   // GAP/GATT state
   volatile bool     deviceConnected   = false;
@@ -542,6 +546,7 @@ private:
   volatile uint32_t disconnectCount   = 0; // ENOTCONN/EOS events
   volatile uint32_t unclassifiedCount = 0; // any other non-classified errors
   volatile uint32_t softwareErrorCount= 0; // number of EINVAL, EAPP, EBADDATA, ECONTROLLER, EUNKNOWN events observed
+  Print* diagnosticOutput = nullptr; // nullptr selects Serial lazily
   
   // RX book-keeping
   volatile size_t   bytesRx           = 0;
