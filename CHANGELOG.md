@@ -6,3 +6,8 @@
 - March 2026 version 1.2.0: added pairing policies and pairing window control; switched RingBuffer to external dependency `UUtzinger_RingBuffer`.
 - November 2025 error handling of onStatus, buffer optimizations.
 - November 2025 first release
+
+- November 2026 version 1.3.3: apply the four-second RSSI adaptation holdoff after
+  immediate PHY request failures and successful or failed PHY completions.
+  Prevent overlapping adaptive requests while initial or adaptive PHY negotiation
+  is pending, and ignore PHY completion events for other connections.

@@ -2,6 +2,12 @@
 
 Short recipes for common goals. Adjust as needed for your environment.
 
+RSSI adaptation runs while connected, including when no application data is
+flowing. Each PHY request waits for completion before another adaptive request
+can start. A four-second holdoff follows an immediate request failure or a PHY
+completion (successful or failed), followed by fresh RSSI confirmation samples.
+Pending PHY requests are cleared on disconnect and shutdown.
+
 ### Fast (throughput + low latency)
 
 ```cpp

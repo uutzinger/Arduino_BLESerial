@@ -594,6 +594,7 @@ private:
   volatile int8_t   rssiAvg           = 0;
   volatile uint32_t lastRSSIMs        = 0;
   volatile uint32_t lastRSSIActionMs  = 0;
+  volatile bool     phyUpdatePending = false; // accepted PHY request awaiting GAP completion
   volatile uint8_t  rssiCandidatePhyMask = 0;
   volatile uint8_t  rssiCandidateCodedScheme = 0;
   volatile uint8_t  rssiCandidateCount = 0;

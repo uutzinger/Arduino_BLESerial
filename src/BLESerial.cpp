@@ -130,6 +130,7 @@ public:
     s.rssiAvg         = 0;
     s.lastRSSIMs      = 0;
     s.lastRSSIActionMs = millis();
+    s.phyUpdatePending = false;
     s.resetRSSIDecision();
     s.lastCongestionAtUs = 0;
     s.lastCongestionLogUs = 0;
@@ -172,7 +173,12 @@ public:
       codedSchemePref = (s.desiredCodedScheme == 2 ? BLE_GAP_LE_PHY_CODED_S2 : BLE_GAP_LE_PHY_CODED_S8);
     }
 
-    (void)ble_gap_set_prefered_le_phy(s.connHandle, s.desiredPhyMask, s.desiredPhyMask, codedSchemePref);
+    // Mark pending before submitting: completion may arrive before the call returns.
+    s.phyUpdatePending = true;
+    if (ble_gap_set_prefered_le_phy(s.connHandle, s.desiredPhyMask, s.desiredPhyMask, codedSchemePref) != 0) {
+      s.lastRSSIActionMs = millis();
+      s.phyUpdatePending = false;
+    }
 
     // Learn actual negotiated PHY
     uint8_t txPhy = 0, rxPhy = 0;
@@ -304,6 +310,7 @@ public:
     s.rssiAvg           = 0;
     s.lastRSSIMs        = 0;
     s.lastRSSIActionMs  = 0;
+    s.phyUpdatePending = false;
     s.resetRSSIDecision();
     s.lastCongestionAtUs = 0;
     s.lastCongestionLogUs = 0;
@@ -757,6 +764,7 @@ int BLESerial::gapEventHandler(struct ble_gap_event *ev, void * /*arg*/) {
     case BLE_GAP_EVENT_PHY_UPDATE_COMPLETE:
     {
       const auto &p = ev->phy_updated;
+      if (!s.isConnected() || p.conn_handle != s.connHandle) return 0;
 
       if (p.status != 0) {
         // The current PHY did not change. Keep its timing and allow a later
@@ -770,6 +778,8 @@ int BLESerial::gapEventHandler(struct ble_gap_event *ev, void * /*arg*/) {
           s.desiredCodedScheme = 0;
         }
         s.resetRSSIDecision();
+        s.lastRSSIActionMs = millis();
+        s.phyUpdatePending = false;
         diagnostic(LOG_LEVEL_WARN, "WARN", "BLESerial: PHY update failed (status=%u).", (unsigned)p.status);
         return 0;
       }
@@ -782,6 +792,8 @@ int BLESerial::gapEventHandler(struct ble_gap_event *ev, void * /*arg*/) {
       s.phyIsCoded = (p.tx_phy == BLE_HCI_LE_PHY_CODED) && (p.rx_phy == BLE_HCI_LE_PHY_CODED);
       s.codedScheme = s.phyIsCoded ? (s.desiredCodedScheme == 2 ? 2 : 8) : 0;
       s.resetRSSIDecision();
+      s.lastRSSIActionMs = millis();
+      s.phyUpdatePending = false;
 
       // Early return if PHY/coding unchanged (suppress redundant recompute/log)
       if (prev2M == s.phyIs2M && prevCoded == s.phyIsCoded && prevScheme == s.codedScheme) {
@@ -1348,6 +1360,7 @@ void BLESerial::end()
   rssiAvg            = 0;
   lastRSSIMs         = 0;
   lastRSSIActionMs   = 0;
+  phyUpdatePending  = false;
   resetRSSIDecision();
   lastCongestionAtUs = 0;
   lastCongestionLogUs = 0;
@@ -2251,8 +2264,9 @@ void BLESerial::adjustLink() {
   else
     rssiAvg = (int8_t)((4 * (int)rssiAvg + (int)rssiRaw) / 5);
 
-  // Do not accumulate a pending decision during the post-change holdoff.
-  if ((millis() - lastRSSIActionMs) < RSSI_ACTION_COOLDOWN_MS) {
+  // Keep sampling RSSI, but wait for negotiation and the post-attempt holdoff
+  // before accumulating a fresh decision, including after a failed request.
+  if (phyUpdatePending || (millis() - lastRSSIActionMs) < RSSI_ACTION_COOLDOWN_MS) {
     resetRSSIDecision();
     return;
   }
@@ -2346,6 +2360,8 @@ void BLESerial::adjustLink() {
   const uint8_t previousDesiredCodedScheme = desiredCodedScheme;
   desiredPhyMask = (newDesiredCodedScheme > 0) ? BLE_GAP_LE_PHY_CODED_MASK : newDesiredPhyMask;
   desiredCodedScheme = newDesiredCodedScheme;
+  lastRSSIActionMs = millis();
+  phyUpdatePending = true;
   if (desiredCodedScheme > 0) {
     // renegotiate coded PHY with selected scheme
     rc = ble_gap_set_prefered_le_phy(
@@ -2372,7 +2388,6 @@ void BLESerial::adjustLink() {
   }
 
   if (rc == 0) {
-    lastRSSIActionMs = millis();
     resetRSSIDecision();
     if (logGetLevel() <= LOG_LEVEL_INFO) {
       const char *target = (desiredCodedScheme ? (desiredCodedScheme == 2 ? "CODED(S2)" : "CODED(S8)")
@@ -2384,6 +2399,8 @@ void BLESerial::adjustLink() {
     desiredPhyMask = previousDesiredPhyMask;
     desiredCodedScheme = previousDesiredCodedScheme;
     resetRSSIDecision();
+    lastRSSIActionMs = millis();
+    phyUpdatePending = false;
     diagnostic(LOG_LEVEL_WARN, "WARN", "BLESerial: PHY adapt failed (rc=%d).", rc);
   }
 }
