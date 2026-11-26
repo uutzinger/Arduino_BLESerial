@@ -207,6 +207,14 @@ static constexpr uint32_t       WRITE_DEFAULT_TIMEOUT_MS        = 250;
 static constexpr uint32_t       TX_TASK_STACK_BYTES             = 4096;
 static constexpr uint32_t       RSSI_TASK_STACK_BYTES           = 3072;
 
+
+/***************************************************************************************************/
+/* Device Driver */
+/***************************************************************************************************/
+
+class BLESerial : public Stream {
+// ================================================================================================
+public:
 /******************************************************************************************************/
 /* Structures */
 /******************************************************************************************************/
@@ -253,25 +261,6 @@ enum class TxSuccess{
   SoftwareError,
   Unclassified
 };
-
-/***************************************************************************************************/
-/* Device Driver */
-/***************************************************************************************************/
-
-class BLESerial : public Stream {
-// ================================================================================================
-public:
-// ================================================================================================
-  // Provide a nested alias so user code can refer to BLESerial::Mode
-  using Mode = ::Mode;
-  // Provide a nested alias so user code can refer to BLESerial::Security
-  using Security = ::Security;
-  // Provide a nested alias so user code can refer to BLESerial::PairingPolicy
-  using PairingPolicy = ::PairingPolicy;
-  // Provide a nested alias so user code can refer to BLESerial::PumpMode
-  using PumpMode = ::PumpMode;
-  // Provide a nested alias so user code can refer to BLESerial::TxState
-  using TxState = ::TxState;
 
   // ----------------------------------------------------------------------------------------------
   // Lifecycle

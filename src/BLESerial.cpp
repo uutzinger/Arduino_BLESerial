@@ -58,11 +58,11 @@ static const char *hsCodeName(int code) {
   }
 } // end of hsCodeName
 
-static const char *pairingPolicyName(PairingPolicy policy) {
+static const char *pairingPolicyName(BLESerial::PairingPolicy policy) {
   switch (policy) {
-    case PairingPolicy::AlwaysOpen: return "AlwaysOpen";
-    case PairingPolicy::Windowed:   return "Windowed";
-    case PairingPolicy::BondedOnly: return "BondedOnly";
+    case BLESerial::PairingPolicy::AlwaysOpen: return "AlwaysOpen";
+    case BLESerial::PairingPolicy::Windowed:   return "Windowed";
+    case BLESerial::PairingPolicy::BondedOnly: return "BondedOnly";
     default:                        return "Unknown";
   }
 }
